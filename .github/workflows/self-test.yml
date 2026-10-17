@@ -1,0 +1,111 @@
+name: Self-test
+
+# The two passes and the installed-copy check (actions/bundle, actions/verify) on a Tauri app with
+# nothing in it (tests/fixture), end to end, with a code-signing certificate made in this job standing
+# in for code-sign: sign the app, bundle and collect, sign what was collected, bundle and substitute,
+# sign the installer, then install and check that every installed file carries that signature. The
+# signing jobs themselves are code-sign's; windows.yml only places them between these steps.
+
+on:
+  push:
+    branches: [main]
+    paths: ['actions/**', 'tests/fixture/**', '.github/workflows/self-test.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  two-pass:
+    runs-on: windows-latest        # NSIS bundling and Authenticode run on Windows
+    timeout-minutes: 45
+    env:
+      TAURI_CLI: '@tauri-apps/cli@2.12.1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+
+      - name: Build without bundling
+        shell: pwsh
+        working-directory: tests/fixture
+        run: |
+          npx --yes $env:TAURI_CLI icon app-icon.png
+          npx --yes $env:TAURI_CLI build --no-bundle
+
+      - name: A code-signing certificate for this job only (stands in for code-sign)
+        id: cert
+        shell: pwsh
+        run: |
+          $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=tauri-release self-test' -CertStoreLocation Cert:\CurrentUser\My
+          "thumbprint=$($cert.Thumbprint)" >> $env:GITHUB_OUTPUT
+          # Sign a list of files in place, as code-sign's job would.
+          @'
+          param([string] $Thumbprint, [string[]] $Files)
+          $cert = Get-Item "Cert:\CurrentUser\My\$Thumbprint"
+          foreach ($f in $Files) {
+            $r = Set-AuthenticodeSignature -FilePath $f -Certificate $cert -HashAlgorithm SHA256
+            if (-not $r.SignerCertificate) { throw "not signed: $f — $($r.Status) $($r.StatusMessage)" }
+          }
+          '@ | Set-Content (Join-Path $env:RUNNER_TEMP 'sign.ps1')
+
+      - name: Sign the app executable
+        shell: pwsh
+        run: pwsh -File (Join-Path $env:RUNNER_TEMP 'sign.ps1') -Thumbprint '${{ steps.cert.outputs.thumbprint }}' -Files (Resolve-Path tests/fixture/src-tauri/target/release/fixture.exe).Path
+
+      - id: pass1
+        uses: ./actions/bundle
+        with:
+          app-dir: tests/fixture
+          mode: collect
+          extras-dir: ${{ runner.temp }}/extras
+          tauri-cli: ${{ env.TAURI_CLI }}
+
+      - name: Sign what the first pass collected
+        shell: pwsh
+        env:
+          EXTRAS: ${{ steps.pass1.outputs.extras }}
+        run: |
+          $from = Join-Path $env:RUNNER_TEMP 'extras'
+          $to = Join-Path $env:RUNNER_TEMP 'extras-signed'
+          $list = @($env:EXTRAS -split "`n" | ForEach-Object Trim | Where-Object { $_ })
+          "collected: $($list -join ', ')"
+          if ($list -notcontains 'uninstall.exe') { throw 'no uninstaller collected' }
+          $files = foreach ($f in $list) { $t = Join-Path $to $f; New-Item -ItemType Directory -Force (Split-Path $t) | Out-Null; Copy-Item (Join-Path $from $f) $t; $t }
+          pwsh -File (Join-Path $env:RUNNER_TEMP 'sign.ps1') -Thumbprint '${{ steps.cert.outputs.thumbprint }}' -Files $files
+
+      - id: pass2
+        uses: ./actions/bundle
+        with:
+          app-dir: tests/fixture
+          mode: substitute
+          extras-dir: ${{ runner.temp }}/extras-pass2
+          signed-dir: ${{ runner.temp }}/extras-signed
+          tauri-cli: ${{ env.TAURI_CLI }}
+
+      - name: Sign the installer
+        shell: pwsh
+        run: pwsh -File (Join-Path $env:RUNNER_TEMP 'sign.ps1') -Thumbprint '${{ steps.cert.outputs.thumbprint }}' -Files '${{ steps.pass2.outputs.installer }}'
+
+      - uses: ./actions/verify
+        with:
+          installer: ${{ steps.pass2.outputs.installer }}
+          signer: ${{ steps.cert.outputs.thumbprint }}
+          trusted: 'false'
+
+      - name: What the hook was given
+        if: always()
+        shell: pwsh
+        run: |
+          foreach ($d in 'extras', 'extras-pass2') {
+            $log = Join-Path $env:RUNNER_TEMP "$d/hook.log"
+            "== $d"; if (Test-Path $log) { Get-Content $log } else { '(never called)' }
+          }

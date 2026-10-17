@@ -1,6 +1,6 @@
 # Design — the first workflow
 
-Status: draft. Nothing here is published as a workflow yet; this is the shape the first one is built to.
+Status: built — `.github/workflows/windows.yml` with `actions/bundle` and `actions/verify`; unreleased. The updater stage is not built yet.
 
 ## The problem
 
@@ -26,7 +26,7 @@ build            no credential   build the app and its helpers (--no-bundle); ha
 sign-binaries    code-sign       sign.yml on the fixed list
 bundle-1         no credential   bundle from the signed files (--no-binary-patching);
                                  the sign hook only copies the uninstaller out
-sign-uninstaller code-sign       sign.yml on the one uninstaller
+sign-extras      code-sign       sign.yml on the uninstaller and the NSIS plugins
 bundle-2         no credential   bundle again; the sign hook puts the signed uninstaller in
 sign-installer   code-sign       sign.yml on the one installer
 verify           no credential   install the installer into a temporary folder and check every
@@ -47,11 +47,11 @@ draft            contents: write updater signature over the signed installer, la
 
 1. **bundle-1** runs the bundler with a hook that copies the uninstaller it is given out of the
    build (and leaves every other file alone). Its installer is thrown away.
-2. **sign-uninstaller** signs that copy with code-sign.
+2. **sign-extras** signs that copy, and the NSIS plugins, with code-sign.
 3. **bundle-2** runs the bundler again from the same inputs, with a hook that replaces the
    uninstaller it is given by the signed copy.
 
-**Measured** (`measure-two-pass.yml` on `tests/fixture`, Tauri CLI 2.12.1, `windows-latest`): the
+**Measured** (a one-off workflow, since folded into `self-test.yml`, on `tests/fixture`, Tauri CLI 2.12.1, `windows-latest`): the
 installed `uninstall.exe` is byte for byte the copy signed between the passes, its signer is the
 certificate that signed it, the installed app executable is the one that was built, and the signed
 uninstaller removes the app. The swap holds.

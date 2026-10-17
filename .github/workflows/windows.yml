@@ -1,0 +1,344 @@
+name: Windows release (reusable)
+
+# Bundles and signs a Tauri app for Windows with the signing credential only in code-sign's signing
+# jobs. The caller builds (no credential) and hands over two artifacts: exactly the files to sign, and
+# what bundling reads. Then:
+#
+#   sign-binaries (code-sign) → bundle-1: collect the uninstaller and NSIS plugins (no credential)
+#   → sign-extras (code-sign) → bundle-2: put them in signed (no credential) → sign-installer (code-sign)
+#   → verify: install and check every installed file's signature (no credential) → draft (optional)
+#
+#   jobs:
+#     release:
+#       needs: build
+#       uses: iyulab/tauri-release/.github/workflows/windows.yml@<sha> # <tag>
+#       permissions:
+#         id-token: write     # the three signing jobs
+#         contents: write     # only with draft: true
+#       with:
+#         unsigned-artifact: unsigned-binaries
+#         files: ${{ needs.build.outputs.sign-files }}
+#         bundle-artifact: bundle-input
+#         app-dir: my-app
+#         tauri-cli: '@tauri-apps/cli@2.12.1'
+#
+# The steps of this repository come from the same commit as this file (job.workflow_sha), so pinning
+# this workflow pins them too. Every third-party action is pinned to a commit; the tag is in the comment.
+
+on:
+  workflow_call:
+    inputs:
+      unsigned-artifact:
+        description: Artifact (from the calling run) holding exactly the files to sign before bundling.
+        required: true
+        type: string
+      files:
+        description: Newline-separated paths of those files, relative to the artifact root — and to the bundle artifact's root, where their signed copies are put.
+        required: true
+        type: string
+      bundle-artifact:
+        description: Artifact holding what bundling reads (the app's sources and its built, unsigned files).
+        required: true
+        type: string
+      app-dir:
+        description: Directory of the Tauri app inside the bundle artifact.
+        required: true
+        type: string
+      tauri-cli:
+        description: The Tauri CLI as an npm spec, e.g. @tauri-apps/cli@2.12.1.
+        required: true
+        type: string
+      node-version:
+        description: Node.js for the Tauri CLI.
+        required: false
+        type: string
+        default: '24'
+      config:
+        description: Extra --config overlays for the bundler (newline-separated JSON paths relative to app-dir).
+        required: false
+        type: string
+        default: ''
+      description:
+        description: Description shown in the signatures, e.g. the product name.
+        required: false
+        type: string
+        default: ''
+      description-url:
+        description: URL shown in the signatures.
+        required: false
+        type: string
+        default: ''
+      unsigned-ok:
+        description: Newline-separated globs of installed files that need not be signed (relative to the install folder); empty for none.
+        required: false
+        type: string
+        default: ''
+      installer-artifact:
+        description: Name the signed installer is uploaded as.
+        required: false
+        type: string
+        default: signed-installer
+      draft:
+        description: Create a draft GitHub Release in the calling repository from the signed installer.
+        required: false
+        type: boolean
+        default: false
+      tag:
+        description: For a draft — its tag.
+        required: false
+        type: string
+        default: ''
+      title:
+        description: For a draft — its title.
+        required: false
+        type: string
+        default: ''
+      notes:
+        description: For a draft — its notes.
+        required: false
+        type: string
+        default: ''
+      alias:
+        description: For a draft — a second, version-free name for the installer (a stable download link); empty for none.
+        required: false
+        type: string
+        default: ''
+    outputs:
+      installer:
+        description: File name of the signed installer.
+        value: ${{ jobs.bundle-2.outputs.installer }}
+
+permissions: {}
+
+jobs:
+  sign-binaries:
+    uses: iyulab/code-sign/.github/workflows/sign.yml@c4c68c25295ce0010a396d54cdb017fd248c5cce
+    permissions:
+      id-token: write
+      contents: read
+    with:
+      artifact: ${{ inputs.unsigned-artifact }}
+      files: ${{ inputs.files }}
+      signed-artifact: tauri-release-signed-binaries
+      description: ${{ inputs.description }}
+      description-url: ${{ inputs.description-url }}
+
+  # The first pass: an installer that is thrown away, and the files only the bundle produces.
+  bundle-1:
+    needs: sign-binaries
+    runs-on: windows-latest        # the NSIS bundler runs on Windows
+    timeout-minutes: 30
+    permissions: {}
+    outputs:
+      extras: ${{ steps.pass.outputs.extras }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .tauri-release
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ inputs.bundle-artifact }}
+          path: src
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: tauri-release-signed-binaries
+          path: signed
+      # The bundler reads the crate's metadata through cargo; nothing is compiled here.
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ inputs.node-version }}
+      - name: Put the signed binaries in place
+        shell: pwsh
+        env:
+          FILES: ${{ inputs.files }}
+        run: |
+          foreach ($f in @($env:FILES -split "`n" | ForEach-Object Trim | Where-Object { $_ })) {
+            Copy-Item (Join-Path signed $f) (Join-Path src $f) -Force
+          }
+      - id: pass
+        uses: ./.tauri-release/actions/bundle
+        with:
+          app-dir: src/${{ inputs.app-dir }}
+          mode: collect
+          extras-dir: ${{ runner.temp }}/extras
+          tauri-cli: ${{ inputs.tauri-cli }}
+          config: ${{ inputs.config }}
+      - name: Stage what the second signing job signs
+        shell: pwsh
+        env:
+          EXTRAS: ${{ steps.pass.outputs.extras }}
+        run: |
+          $from = Join-Path $env:RUNNER_TEMP 'extras'
+          $to = Join-Path $env:RUNNER_TEMP 'extras-unsigned'
+          foreach ($f in @($env:EXTRAS -split "`n" | ForEach-Object Trim | Where-Object { $_ })) {
+            $t = Join-Path $to $f
+            New-Item -ItemType Directory -Force (Split-Path $t) | Out-Null
+            Copy-Item (Join-Path $from $f) $t
+          }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tauri-release-extras
+          path: ${{ runner.temp }}/extras-unsigned
+          if-no-files-found: error
+          retention-days: 1
+
+  sign-extras:
+    needs: bundle-1
+    uses: iyulab/code-sign/.github/workflows/sign.yml@c4c68c25295ce0010a396d54cdb017fd248c5cce
+    permissions:
+      id-token: write
+      contents: read
+    with:
+      artifact: tauri-release-extras
+      files: ${{ needs.bundle-1.outputs.extras }}
+      signed-artifact: tauri-release-signed-extras
+      description: ${{ inputs.description }}
+      description-url: ${{ inputs.description-url }}
+
+  # The second pass, from the same inputs, with the signed uninstaller and plugins put in.
+  bundle-2:
+    needs: sign-extras
+    runs-on: windows-latest        # the NSIS bundler runs on Windows
+    timeout-minutes: 30
+    permissions: {}
+    outputs:
+      installer: ${{ steps.name.outputs.installer }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .tauri-release
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ inputs.bundle-artifact }}
+          path: src
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: tauri-release-signed-binaries
+          path: signed
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: tauri-release-signed-extras
+          path: ${{ runner.temp }}/extras-signed
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ inputs.node-version }}
+      - name: Put the signed binaries in place
+        shell: pwsh
+        env:
+          FILES: ${{ inputs.files }}
+        run: |
+          foreach ($f in @($env:FILES -split "`n" | ForEach-Object Trim | Where-Object { $_ })) {
+            Copy-Item (Join-Path signed $f) (Join-Path src $f) -Force
+          }
+      - id: pass
+        uses: ./.tauri-release/actions/bundle
+        with:
+          app-dir: src/${{ inputs.app-dir }}
+          mode: substitute
+          extras-dir: ${{ runner.temp }}/extras
+          signed-dir: ${{ runner.temp }}/extras-signed
+          tauri-cli: ${{ inputs.tauri-cli }}
+          config: ${{ inputs.config }}
+      - id: name
+        shell: pwsh
+        env:
+          INSTALLER: ${{ steps.pass.outputs.installer }}
+        run: |
+          $stage = Join-Path $env:RUNNER_TEMP 'unsigned-installer'
+          New-Item -ItemType Directory -Force $stage | Out-Null
+          Copy-Item $env:INSTALLER $stage
+          "installer=$(Split-Path -Leaf $env:INSTALLER)" >> $env:GITHUB_OUTPUT
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tauri-release-unsigned-installer
+          path: ${{ runner.temp }}/unsigned-installer
+          if-no-files-found: error
+          retention-days: 1
+
+  sign-installer:
+    needs: bundle-2
+    uses: iyulab/code-sign/.github/workflows/sign.yml@c4c68c25295ce0010a396d54cdb017fd248c5cce
+    permissions:
+      id-token: write
+      contents: read
+    with:
+      artifact: tauri-release-unsigned-installer
+      files: ${{ needs.bundle-2.outputs.installer }}
+      signed-artifact: ${{ inputs.installer-artifact }}
+      description: ${{ inputs.description }}
+      description-url: ${{ inputs.description-url }}
+
+  verify:
+    needs: [bundle-2, sign-installer]
+    runs-on: windows-latest        # installs the installer and reads Authenticode signatures
+    timeout-minutes: 15
+    permissions: {}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .tauri-release
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ inputs.installer-artifact }}
+          path: dist
+      - uses: ./.tauri-release/actions/verify
+        with:
+          installer: dist/${{ needs.bundle-2.outputs.installer }}
+          unsigned-ok: ${{ inputs.unsigned-ok }}
+
+  draft:
+    if: ${{ inputs.draft }}
+    needs: [bundle-2, verify]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ inputs.installer-artifact }}
+          path: dist
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INSTALLER: ${{ needs.bundle-2.outputs.installer }}
+          TAG: ${{ inputs.tag }}
+          TITLE: ${{ inputs.title }}
+          NOTES: ${{ inputs.notes }}
+          ALIAS: ${{ inputs.alias }}
+        run: |
+          if [ -z "$TAG" ]; then echo 'a draft needs a tag' >&2; exit 1; fi
+          if [ -n "$ALIAS" ]; then cp "dist/$INSTALLER" "dist/$ALIAS"; fi
+          gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --draft --title "${TITLE:-$TAG}" --notes "$NOTES"
+
+  # Intermediate artifacts are not kept past the run; the signed installer stays for its retention.
+  cleanup:
+    if: ${{ always() }}
+    needs: [bundle-1, bundle-2, verify]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - uses: geekyeggo/delete-artifact@176a747ab7e287e3ff4787bf8a148716375ca118 # v6.0.0
+        with:
+          name: |
+            tauri-release-signed-binaries
+            tauri-release-extras
+            tauri-release-signed-extras
+            tauri-release-unsigned-installer
+          failOnError: false

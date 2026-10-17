@@ -15,10 +15,24 @@ stages whatever the app is:
    copy, the updater signature, the update manifest
 6. write the update manifest (`latest.json`) and a draft release
 
-This repository will hold that sequence as a `workflow_call` workflow plus the small composite
-actions it is made of. Signing itself stays in code-sign; this repository only calls it.
+`.github/workflows/windows.yml` is that sequence as a `workflow_call` workflow, from step 2 on: the
+caller builds (step 1, its own) and hands over the files to sign and what bundling reads. The
+uninstaller and the NSIS plugins, which the bundler produces itself, are signed between two bundling
+passes, so the signing credential never enters a job that runs the app's toolchain. The workflow is
+made of two composite actions that can be used on their own:
 
-**Status:** no workflow is published yet. See [SCOPE.md](SCOPE.md) for what belongs here, and [docs/design.md](docs/design.md) for the shape of the first workflow.
+- `actions/bundle` — bundle from built, signed files without re-patching them; `collect` the files
+  only the bundle produces, or `substitute` their signed copies.
+- `actions/verify` — install the installer silently and check the signature of every installed
+  executable and DLL, the uninstaller included; then uninstall.
+
+`.github/workflows/self-test.yml` runs both on a Tauri app with nothing in it, with a certificate
+made for the test standing in for code-sign. Signing itself stays in code-sign; this repository only
+calls it.
+
+**Status:** unreleased. Not yet here: the updater signature and `latest.json` (step 6 for an app
+that uses Tauri's updater). See [SCOPE.md](SCOPE.md) for what belongs here, and
+[docs/design.md](docs/design.md) for the design.
 
 ## License
 

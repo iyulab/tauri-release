@@ -1,0 +1,87 @@
+name: Bundle around a separate signing job
+description: >-
+  Runs the Tauri NSIS bundler from already-built (and already-signed) files, without re-patching the
+  app executable, with a sign hook that signs nothing. `collect` copies out the files only the bundle
+  produces — the uninstaller and the NSIS plugins — so a separate job can sign them; `substitute`
+  puts their signed copies in, so the installer carries them signed.
+
+inputs:
+  app-dir:
+    description: Directory of the Tauri app (holds src-tauri, or is it), from the workspace root.
+    required: true
+  mode:
+    description: "`collect` (first pass) or `substitute` (second pass)."
+    required: true
+  extras-dir:
+    description: Where `collect` puts the uninstaller (uninstall.exe) and plugins (plugins/<name>), and the hook log.
+    required: true
+  signed-dir:
+    description: For `substitute` — the signed copies, in the layout `collect` produced.
+    required: false
+    default: ''
+  tauri-cli:
+    description: The Tauri CLI to run, as an npm spec (e.g. @tauri-apps/cli@2.12.1).
+    required: true
+  config:
+    description: Extra --config overlays (newline-separated JSON file paths relative to app-dir), applied after the hook's.
+    required: false
+    default: ''
+
+outputs:
+  installer:
+    description: Full path of the one installer this pass produced.
+    value: ${{ steps.bundle.outputs.installer }}
+  extras:
+    description: For `collect` — the collected files, newline-separated, relative to extras-dir.
+    value: ${{ steps.bundle.outputs.extras }}
+
+runs:
+  using: composite
+  steps:
+    - id: bundle
+      shell: pwsh
+      working-directory: ${{ inputs.app-dir }}
+      env:
+        MODE: ${{ inputs.mode }}
+        TAURI_RELEASE_EXTRAS: ${{ inputs.extras-dir }}
+        TAURI_RELEASE_SIGNED: ${{ inputs.signed-dir }}
+        TAURI_CLI: ${{ inputs.tauri-cli }}
+        CONFIG: ${{ inputs.config }}
+        HOOK: ${{ github.action_path }}/hook.ps1
+      run: |
+        $ErrorActionPreference = 'Stop'
+        if ($env:MODE -notin 'collect', 'substitute') { throw "mode must be collect or substitute, not '$env:MODE'" }
+        if ($env:MODE -eq 'substitute' -and -not $env:TAURI_RELEASE_SIGNED) { throw 'substitute needs signed-dir' }
+        New-Item -ItemType Directory -Force $env:TAURI_RELEASE_EXTRAS | Out-Null
+        $hookConfig = Join-Path $env:RUNNER_TEMP "tauri-release-hook-$env:MODE.json"
+        @{ bundle = @{ windows = @{ signCommand = @{ cmd = 'pwsh'; args = @('-NoProfile', '-File', $env:HOOK, $env:MODE, '%1') } } } } |
+          ConvertTo-Json -Depth 6 | Set-Content -Encoding utf8 $hookConfig
+        $overlays = @('--config', $hookConfig)
+        foreach ($c in @($env:CONFIG -split "`n" | ForEach-Object Trim | Where-Object { $_ })) { $overlays += @('--config', $c) }
+
+        # The bundle folder is rebuilt from scratch: a pass must not pick up the other pass's installer.
+        $nsis = @(Get-ChildItem -Recurse -Directory -Filter nsis -ErrorAction SilentlyContinue | Where-Object { $_.Parent.Name -eq 'bundle' })
+        $nsis | Remove-Item -Recurse -Force
+        # --no-binary-patching: patching rewrites the app executable in place and breaks the signature it already carries.
+        npx --yes $env:TAURI_CLI bundle --bundles nsis --no-binary-patching @overlays
+        if ($LASTEXITCODE -ne 0) { throw "the bundler failed ($LASTEXITCODE)" }
+
+        $setup = @(Get-ChildItem -Recurse -File -Filter *-setup.exe | Where-Object { $_.Directory.Name -eq 'nsis' -and $_.Directory.Parent.Name -eq 'bundle' })
+        if ($setup.Count -ne 1) { throw "expected one installer, found: $($setup.FullName -join ', ')" }
+        "installer=$($setup[0].FullName)" >> $env:GITHUB_OUTPUT
+
+        if ($env:MODE -eq 'collect') {
+          if (-not (Test-Path (Join-Path $env:TAURI_RELEASE_EXTRAS 'uninstall.exe'))) { throw 'the bundler handed the hook no uninstaller' }
+          $collected = @(Get-ChildItem -Recurse -File $env:TAURI_RELEASE_EXTRAS | Where-Object Extension -in '.exe', '.dll' |
+            ForEach-Object { [IO.Path]::GetRelativePath($env:TAURI_RELEASE_EXTRAS, $_.FullName).Replace('\', '/') } | Sort-Object)
+          "extras<<EOF" >> $env:GITHUB_OUTPUT
+          $collected >> $env:GITHUB_OUTPUT
+          "EOF" >> $env:GITHUB_OUTPUT
+        } else {
+          $log = @(Get-Content (Join-Path $env:TAURI_RELEASE_EXTRAS 'hook.log') | ConvertFrom-Json)
+          $expected = @(Get-ChildItem -Recurse -File $env:TAURI_RELEASE_SIGNED | Where-Object Extension -in '.exe', '.dll' |
+            ForEach-Object { [IO.Path]::GetRelativePath($env:TAURI_RELEASE_SIGNED, $_.FullName).Replace('\', '/') })
+          $done = @($log | Where-Object action -eq 'substituted' | ForEach-Object as | Sort-Object -Unique)
+          $missed = @($expected | Where-Object { $_ -notin $done })
+          if ($missed) { throw "the bundler did not hand the hook these files this time, so their signed copies are not in the installer: $($missed -join ', ')" }
+        }

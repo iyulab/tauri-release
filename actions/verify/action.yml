@@ -1,0 +1,66 @@
+name: Check the installed copy
+description: >-
+  Installs an NSIS installer silently into a temporary folder and checks the Authenticode signature
+  of every executable and DLL it installed — the uninstaller included, which is the file a bundle
+  signed outside the bundler is most likely to miss — then uninstalls with that uninstaller.
+
+inputs:
+  installer:
+    description: Path of the installer to check (its own signature is checked too).
+    required: true
+  signer:
+    description: Thumbprint of the certificate every signature must come from, or empty to accept any.
+    required: false
+    default: ''
+  trusted:
+    description: "`true`: every signature must be Valid (chains to a trusted root). `false`: only signed by `signer` — for a certificate made for a test."
+    required: false
+    default: 'true'
+  unsigned-ok:
+    description: Newline-separated globs (relative to the install folder) of files that need not be signed; empty for none.
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - shell: pwsh
+      env:
+        INSTALLER: ${{ inputs.installer }}
+        SIGNER: ${{ inputs.signer }}
+        TRUSTED: ${{ inputs.trusted }}
+        UNSIGNED_OK: ${{ inputs.unsigned-ok }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $ok = {
+          param($path)
+          $sig = Get-AuthenticodeSignature -LiteralPath $path
+          $by = $sig.SignerCertificate.Thumbprint
+          $signed = $null -ne $sig.SignerCertificate -and ($env:SIGNER -eq '' -or $by -eq $env:SIGNER)
+          if ($env:TRUSTED -eq 'true') { $signed -and $sig.Status -eq 'Valid' } else { $signed -and $sig.Status -ne 'HashMismatch' }
+        }
+        if (-not (& $ok $env:INSTALLER)) { throw "the installer itself is not signed as required: $env:INSTALLER" }
+
+        $dir = Join-Path $env:RUNNER_TEMP ('installed-' + [guid]::NewGuid().ToString('n').Substring(0, 8))
+        $p = Start-Process -FilePath $env:INSTALLER -ArgumentList '/S', "/D=$dir" -Wait -PassThru
+        if ($p.ExitCode -ne 0) { throw "the installer ended with $($p.ExitCode)" }
+        $uninstaller = Join-Path $dir 'uninstall.exe'
+        if (-not (Test-Path $uninstaller)) { throw 'nothing installed an uninstaller' }
+
+        $skip = @($env:UNSIGNED_OK -split "`n" | ForEach-Object Trim | Where-Object { $_ })
+        $files = @(Get-ChildItem -Recurse -File $dir | Where-Object Extension -in '.exe', '.dll')
+        $rows = foreach ($f in $files) {
+          $rel = [IO.Path]::GetRelativePath($dir, $f.FullName).Replace('\', '/')
+          $exempt = @($skip | Where-Object { $rel -like $_ }).Count -gt 0
+          [pscustomobject]@{ File = $rel; Ok = $exempt -or (& $ok $f.FullName); Exempt = $exempt; Status = (Get-AuthenticodeSignature -LiteralPath $f.FullName).Status }
+        }
+        $rows | Format-Table -AutoSize | Out-String -Width 200 | Write-Host
+        $bad = @($rows | Where-Object { -not $_.Ok })
+        @("## Installed copy — $(@($rows | Where-Object { $_.Ok -and -not $_.Exempt }).Count) signed of $($rows.Count)") +
+          ($bad | ForEach-Object { "- ❌ $($_.File) ($($_.Status))" }) | Add-Content $env:GITHUB_STEP_SUMMARY
+
+        $u = Start-Process -FilePath $uninstaller -ArgumentList '/S' -Wait -PassThru
+        $gone = $false
+        for ($i = 0; $i -lt 60 -and -not $gone; $i++) { Start-Sleep -Seconds 1; $gone = -not (Test-Path $uninstaller) }
+        if ($bad) { throw "installed files without the required signature: $($bad.File -join ', ')" }
+        if (-not $gone) { throw "the installed uninstaller did not remove the app (exit $($u.ExitCode))" }
