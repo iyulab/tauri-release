@@ -33,8 +33,8 @@ $chain = @($parent, $grandparent) | Where-Object { $_ } | ForEach-Object Name
 $name = $null
 if (($chain -contains 'makensis.exe') -and -not ($File -like '*-setup.exe')) {
     $name = 'uninstall.exe'
-} elseif ($File -match '[\/]nsis[\/].*[\/]Plugins[\/].+\.dll$') {
-    # under Plugins\<charset>\ and Plugins\<charset>dditional\ — the names do not repeat
+} elseif ($File -match '[\\/]nsis[\\/].*[\\/]Plugins[\\/].+\.dll$') {
+    # under Plugins\<charset>\ and Plugins\<charset>\additional\ — the names do not repeat
     $name = 'plugins/' + (Split-Path -Leaf $File)
 }
 
