@@ -1,0 +1,107 @@
+name: Measure two-pass uninstaller signing
+
+# Measures the plan in docs/design.md ("The uninstaller in two passes") on a Tauri app with nothing in
+# it (tests/fixture): bundle once with a hook that only copies the uninstaller out, sign that copy,
+# bundle again with a hook that puts the signed copy in, then install and check what was installed.
+#
+# No signing credential: a code-signing certificate made in this job stands in for code-sign — the
+# question is whether the installed uninstaller is the file that was signed, not whether the
+# signature chains to a trusted root. Runs by hand only; nothing is uploaded.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    runs-on: windows-latest        # NSIS bundling and Authenticode run on Windows
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: tests/fixture
+    env:
+      TAURI_CLI: '@tauri-apps/cli@2.12.1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+
+      - name: Icons, then build without bundling
+        run: |
+          "TWO_PASS_DIR=$(Join-Path $env:RUNNER_TEMP 'two-pass')" >> $env:GITHUB_ENV
+          npx --yes $env:TAURI_CLI icon app-icon.png
+          npx --yes $env:TAURI_CLI build --no-bundle
+
+      - name: A code-signing certificate for this job only
+        id: cert
+        run: |
+          $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=tauri-release two-pass measurement' -CertStoreLocation Cert:\CurrentUser\My
+          "thumbprint=$($cert.Thumbprint)" >> $env:GITHUB_OUTPUT
+
+      - name: Pass 1 — bundle; the hook copies the uninstaller out
+        run: |
+          $hook = (Resolve-Path ../two-pass/hook.ps1).Path
+          @{ bundle = @{ windows = @{ signCommand = @{ cmd = 'pwsh'; args = @('-NoProfile', '-File', $hook, 'collect', '%1') } } } } |
+            ConvertTo-Json -Depth 6 | Set-Content -Encoding utf8 collect.json
+          npx --yes $env:TAURI_CLI bundle --bundles nsis --no-binary-patching --config collect.json
+          $setup = @(Get-ChildItem src-tauri/target/release/bundle/nsis/*-setup.exe)
+          if ($setup.Count -ne 1) { throw "expected one installer: $($setup.Name -join ', ')" }
+          Copy-Item $setup[0].FullName (Join-Path $env:TWO_PASS_DIR 'pass1-setup.exe')
+          if (-not (Test-Path (Join-Path $env:TWO_PASS_DIR 'uninstall.exe'))) { throw 'the hook was given no uninstaller' }
+
+      - name: Sign the collected uninstaller (stands in for code-sign)
+        run: |
+          $signed = Join-Path $env:TWO_PASS_DIR 'uninstall.signed.exe'
+          Copy-Item (Join-Path $env:TWO_PASS_DIR 'uninstall.exe') $signed
+          $cert = Get-Item "Cert:\CurrentUser\My\${{ steps.cert.outputs.thumbprint }}"
+          $result = Set-AuthenticodeSignature -FilePath $signed -Certificate $cert -HashAlgorithm SHA256
+          if (-not $result.SignerCertificate) { throw "not signed: $($result.Status) $($result.StatusMessage)" }
+
+      - name: Pass 2 — bundle again; the hook puts the signed uninstaller in
+        run: |
+          Remove-Item src-tauri/target/release/bundle/nsis -Recurse -Force
+          $hook = (Resolve-Path ../two-pass/hook.ps1).Path
+          @{ bundle = @{ windows = @{ signCommand = @{ cmd = 'pwsh'; args = @('-NoProfile', '-File', $hook, 'substitute', '%1') } } } } |
+            ConvertTo-Json -Depth 6 | Set-Content -Encoding utf8 substitute.json
+          npx --yes $env:TAURI_CLI bundle --bundles nsis --no-binary-patching --config substitute.json
+
+      - name: Install, check what was installed, uninstall
+        run: |
+          $setup = @(Get-ChildItem src-tauri/target/release/bundle/nsis/*-setup.exe)[0].FullName
+          $dir = Join-Path $env:RUNNER_TEMP 'installed'
+          Start-Process $setup -ArgumentList '/S', "/D=$dir" -Wait
+          $uninstaller = Join-Path $dir 'uninstall.exe'
+          $app = Join-Path $dir 'fixture.exe'
+          $signed = Join-Path $env:TWO_PASS_DIR 'uninstall.signed.exe'
+          $hash = { param($p) (Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash }
+          $checks = [ordered]@{
+            'installed uninstaller exists'          = Test-Path $uninstaller
+            'it is the signed copy (same bytes)'    = (Test-Path $uninstaller) -and ((& $hash $uninstaller) -eq (& $hash $signed))
+            'its signer is the test certificate'    = (Test-Path $uninstaller) -and ((Get-AuthenticodeSignature $uninstaller).SignerCertificate.Thumbprint -eq '${{ steps.cert.outputs.thumbprint }}')
+            'the app is the built one (same bytes)' = (Test-Path $app) -and ((& $hash $app) -eq (& $hash 'src-tauri/target/release/fixture.exe'))
+          }
+          Start-Process $uninstaller -ArgumentList '/S' -Wait
+          $gone = $false
+          for ($i = 0; $i -lt 60 -and -not $gone; $i++) { Start-Sleep -Seconds 1; $gone = -not (Test-Path $app) }
+          $checks['the signed uninstaller removes the app'] = $gone
+          $checks.GetEnumerator() | ForEach-Object { "{0,-5} {1}" -f ($_.Value ? 'OK' : 'FAIL'), $_.Key }
+          $summary = $checks.GetEnumerator() | ForEach-Object { "- $($_.Value ? '✅' : '❌') $($_.Key)" }
+          @('## Two-pass uninstaller signing') + $summary | Add-Content $env:GITHUB_STEP_SUMMARY
+          if ($checks.Values -contains $false) { throw 'a check failed' }
+
+      - name: What the hook was given
+        if: always()
+        run: |
+          $log = Join-Path $env:TWO_PASS_DIR 'hook.log'
+          if (Test-Path $log) { Get-Content $log } else { 'the hook was never called' }
