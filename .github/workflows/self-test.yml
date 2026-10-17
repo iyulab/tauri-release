@@ -59,7 +59,8 @@ jobs:
 
       - name: Sign the app executable
         shell: pwsh
-        run: pwsh -File (Join-Path $env:RUNNER_TEMP 'sign.ps1') -Thumbprint '${{ steps.cert.outputs.thumbprint }}' -Files (Resolve-Path tests/fixture/src-tauri/target/release/fixture.exe).Path
+        run: |
+          & (Join-Path $env:RUNNER_TEMP 'sign.ps1') -Thumbprint '${{ steps.cert.outputs.thumbprint }}' -Files (Resolve-Path tests/fixture/src-tauri/target/release/fixture.exe).Path
 
       - id: pass1
         uses: ./actions/bundle
@@ -80,7 +81,7 @@ jobs:
           "collected: $($list -join ', ')"
           if ($list -notcontains 'uninstall.exe') { throw 'no uninstaller collected' }
           $files = foreach ($f in $list) { $t = Join-Path $to $f; New-Item -ItemType Directory -Force (Split-Path $t) | Out-Null; Copy-Item (Join-Path $from $f) $t; $t }
-          pwsh -File (Join-Path $env:RUNNER_TEMP 'sign.ps1') -Thumbprint '${{ steps.cert.outputs.thumbprint }}' -Files $files
+          & (Join-Path $env:RUNNER_TEMP 'sign.ps1') -Thumbprint '${{ steps.cert.outputs.thumbprint }}' -Files $files
 
       - id: pass2
         uses: ./actions/bundle
@@ -93,7 +94,8 @@ jobs:
 
       - name: Sign the installer
         shell: pwsh
-        run: pwsh -File (Join-Path $env:RUNNER_TEMP 'sign.ps1') -Thumbprint '${{ steps.cert.outputs.thumbprint }}' -Files '${{ steps.pass2.outputs.installer }}'
+        run: |
+          & (Join-Path $env:RUNNER_TEMP 'sign.ps1') -Thumbprint '${{ steps.cert.outputs.thumbprint }}' -Files '${{ steps.pass2.outputs.installer }}'
 
       - uses: ./actions/verify
         with:
