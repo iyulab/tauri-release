@@ -18,7 +18,7 @@ stages whatever the app is:
 This repository will hold that sequence as a `workflow_call` workflow plus the small composite
 actions it is made of. Signing itself stays in code-sign; this repository only calls it.
 
-**Status:** no workflow is published yet. See [SCOPE.md](SCOPE.md) for what belongs here.
+**Status:** no workflow is published yet. See [SCOPE.md](SCOPE.md) for what belongs here, and [docs/design.md](docs/design.md) for the shape of the first workflow.
 
 ## License
 

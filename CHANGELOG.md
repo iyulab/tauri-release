@@ -9,3 +9,5 @@ All notable changes to this project are documented here. The format follows
 ### Added
 
 - Repository, scope and license.
+- `docs/design.md`: the shape of the first workflow — signing only in code-sign's reusable workflow, the
+  uninstaller signed between two bundling passes (to be measured), the stages and the inputs.
