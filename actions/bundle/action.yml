@@ -72,6 +72,7 @@ runs:
 
         if ($env:MODE -eq 'collect') {
           if (-not (Test-Path (Join-Path $env:TAURI_RELEASE_EXTRAS 'uninstall.exe'))) { throw 'the bundler handed the hook no uninstaller' }
+          if (-not (Test-Path (Join-Path $env:TAURI_RELEASE_EXTRAS 'plugins'))) { throw 'the bundler handed the hook no NSIS plugin' }
           $collected = @(Get-ChildItem -Recurse -File $env:TAURI_RELEASE_EXTRAS | Where-Object Extension -in '.exe', '.dll' |
             ForEach-Object { [IO.Path]::GetRelativePath($env:TAURI_RELEASE_EXTRAS, $_.FullName).Replace('\', '/') } | Sort-Object)
           "extras<<EOF" >> $env:GITHUB_OUTPUT

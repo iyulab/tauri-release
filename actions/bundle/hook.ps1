@@ -4,7 +4,7 @@
 #
 #   - the uninstaller — the call `makensis` makes (it is among the hook's parents) for a file that is
 #     not the installer; makensis gives a temporary name, so it is told by its caller, not its name;
-#   - the NSIS plugins — the DLLs under `nsis\...\Plugins\` the bundler signs before compiling.
+#   - the NSIS plugins — the DLLs anywhere under `nsis\...\Plugins\` the bundler signs before compiling.
 #
 #   hook.ps1 collect <file>      copy such a file to $env:TAURI_RELEASE_EXTRAS (uninstall.exe, plugins/<name>)
 #   hook.ps1 substitute <file>   replace such a file by its signed copy from $env:TAURI_RELEASE_SIGNED
@@ -33,7 +33,8 @@ $chain = @($parent, $grandparent) | Where-Object { $_ } | ForEach-Object Name
 $name = $null
 if (($chain -contains 'makensis.exe') -and -not ($File -like '*-setup.exe')) {
     $name = 'uninstall.exe'
-} elseif ($File -match '[\/]nsis[\/].*[\/]Plugins[\/][^\/]+\.dll$') {
+} elseif ($File -match '[\/]nsis[\/].*[\/]Plugins[\/].+\.dll$') {
+    # under Plugins\<charset>\ and Plugins\<charset>dditional\ — the names do not repeat
     $name = 'plugins/' + (Split-Path -Leaf $File)
 }
 
