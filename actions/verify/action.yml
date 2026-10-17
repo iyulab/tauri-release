@@ -41,6 +41,17 @@ runs:
         }
         if (-not (& $ok $env:INSTALLER)) { throw "the installer itself is not signed as required: $env:INSTALLER" }
 
+        # The NSIS plugins are never installed — the installer unpacks them to a temporary folder while it
+        # runs — so they are read out of the installer itself.
+        $unpacked = Join-Path $env:RUNNER_TEMP ('unpacked-' + [guid]::NewGuid().ToString('n').Substring(0, 8))
+        7z x -y "-o$unpacked" $env:INSTALLER '$PLUGINSDIR' -r | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "7z could not read the installer ($LASTEXITCODE)" }
+        $plugins = @(Get-ChildItem -Recurse -File -Filter *.dll (Join-Path $unpacked '$PLUGINSDIR') -ErrorAction SilentlyContinue)
+        if ($plugins.Count -eq 0) { throw 'no NSIS plugin found inside the installer' }
+        $badPlugins = @($plugins | Where-Object { -not (& $ok $_.FullName) } | ForEach-Object Name)
+        Write-Host "NSIS plugins inside the installer: $($plugins.Count), not signed as required: $($badPlugins.Count)"
+        if ($badPlugins) { throw "NSIS plugins inside the installer without the required signature: $($badPlugins -join ', ')" }
+
         $dir = Join-Path $env:RUNNER_TEMP ('installed-' + [guid]::NewGuid().ToString('n').Substring(0, 8))
         $p = Start-Process -FilePath $env:INSTALLER -ArgumentList '/S', "/D=$dir" -Wait -PassThru
         if ($p.ExitCode -ne 0) { throw "the installer ended with $($p.ExitCode)" }
