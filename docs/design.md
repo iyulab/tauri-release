@@ -51,11 +51,23 @@ draft            contents: write updater signature over the signed installer, la
 3. **bundle-2** runs the bundler again from the same inputs, with a hook that replaces the
    uninstaller it is given by the signed copy.
 
-What must hold, and will be measured before the workflow is published: the uninstaller of pass 1
-works in place of pass 2's (same script, same inputs); the embedded file is the signed copy (its
-signature is Valid on the installed copy); nothing else in the installer changes because of the
-swap. If it does not hold, the fallback is to ship an unsigned uninstaller and say so, as callers
-using split signing do today — never to bring the credential into a bundle job.
+**Measured** (`measure-two-pass.yml` on `tests/fixture`, Tauri CLI 2.12.1, `windows-latest`): the
+installed `uninstall.exe` is byte for byte the copy signed between the passes, its signer is the
+certificate that signed it, the installed app executable is the one that was built, and the signed
+uninstaller removes the app. The swap holds.
+
+What the hook is given, in order, in each pass (from its log):
+
+| File | Given by | In split signing |
+|---|---|---|
+| the app executable (`target/release/<app>.exe`) | the bundler | already signed by `sign-binaries` — the hook must leave it alone |
+| NSIS plugins (`target/release/nsis/x64/Plugins/x86-unicode/*.dll`, five) | the bundler | unsigned today; collect them with the uninstaller and sign them in the same pass |
+| the uninstaller — a temporary file (`nst*.tmp`) | `makensis` (through `cmd.exe`) | collect in pass 1, substitute in pass 2 |
+| the installer (`bundle/nsis/*-setup.exe`) | the bundler | left alone; `sign-installer` signs it |
+
+So the hook tells the uninstaller by who calls it (`makensis` among its parents), not by its name,
+and treats the plugins by their place under `nsis/`. If a later bundler stops calling the hook for a
+file, the installed-copy check fails rather than shipping it unsigned.
 
 ## Inputs
 
