@@ -23,7 +23,7 @@ inputs:
     description: The Tauri CLI to run, as an npm spec (e.g. @tauri-apps/cli@2.12.1).
     required: true
   config:
-    description: Extra --config overlays (newline-separated JSON file paths relative to app-dir), applied after the hook's.
+    description: Extra --config overlays (newline-separated JSON file paths relative to app-dir), applied after the hook's (updater artifacts stay off whatever they say).
     required: false
     default: ''
 
@@ -58,6 +58,12 @@ runs:
           ConvertTo-Json -Depth 6 | Set-Content -Encoding utf8 $hookConfig
         $overlays = @('--config', $hookConfig)
         foreach ($c in @($env:CONFIG -split "`n" | ForEach-Object Trim | Where-Object { $_ })) { $overlays += @('--config', $c) }
+        # Last, so a caller's overlay cannot turn it back on: no updater artifacts here. There is no updater key in this
+        # job, and a signature over this not-yet-signed installer would break when it is signed; the updater stage signs
+        # the final installer.
+        $noUpdater = Join-Path $env:RUNNER_TEMP "tauri-release-no-updater-$env:MODE.json"
+        '{"bundle":{"createUpdaterArtifacts":false}}' | Set-Content -Encoding utf8 $noUpdater
+        $overlays += @('--config', $noUpdater)
 
         # The bundle folder is rebuilt from scratch: a pass must not pick up the other pass's installer.
         $nsis = @(Get-ChildItem -Recurse -Directory -Filter nsis -ErrorAction SilentlyContinue | Where-Object { $_.Parent.Name -eq 'bundle' })

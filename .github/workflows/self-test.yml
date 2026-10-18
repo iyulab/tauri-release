@@ -103,6 +103,58 @@ jobs:
           signer: ${{ steps.cert.outputs.thumbprint }}
           trusted: 'false'
 
+      # The updater stage (actions/updater) on the same signed installer, with a key made here: sign and
+      # write latest.json, check it, and check that a changed installer and another version are refused.
+      - name: An updater key for this job only, and the installer under a plain path
+        id: ukey
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force updater-test | Out-Null
+          Copy-Item '${{ steps.pass2.outputs.installer }}' updater-test/
+          $name = Split-Path -Leaf '${{ steps.pass2.outputs.installer }}'
+          "installer=updater-test/$name" >> $env:GITHUB_OUTPUT
+          "basename=$name" >> $env:GITHUB_OUTPUT
+          npx --yes $env:TAURI_CLI signer generate --ci -p '' -w "$env:RUNNER_TEMP/updater.key" -f
+          "pubkey=$(Get-Content -Raw "$env:RUNNER_TEMP/updater.key.pub")".Trim() >> $env:GITHUB_OUTPUT
+          $key = Get-Content -Raw "$env:RUNNER_TEMP/updater.key"
+          "::add-mask::$key"
+          "TAURI_SIGNING_PRIVATE_KEY=$key".Trim() >> $env:GITHUB_ENV
+
+      - uses: ./actions/updater
+        with:
+          mode: sign
+          installer: ${{ steps.ukey.outputs.installer }}
+          version: 0.1.0
+          url: https://github.com/example/app/releases/download/v0.1.0/fixture.exe
+          tauri-cli: ${{ env.TAURI_CLI }}
+          out-dir: updater-out
+
+      - uses: ./actions/updater
+        with:
+          mode: verify
+          installer: ${{ steps.ukey.outputs.installer }}
+          version: 0.1.0
+          url: https://github.com/example/app/releases/download/v0.1.0/fixture.exe
+          sig: updater-out/${{ steps.ukey.outputs.basename }}.sig
+          manifest: updater-out/latest.json
+          pubkey: ${{ steps.ukey.outputs.pubkey }}
+
+      - name: A changed installer and another version are refused
+        shell: bash
+        env:
+          INSTALLER: ${{ steps.ukey.outputs.installer }}
+          PUBKEY: ${{ steps.ukey.outputs.pubkey }}
+          URL: https://github.com/example/app/releases/download/v0.1.0/fixture.exe
+        run: |
+          sig="updater-out/$(basename "$INSTALLER").sig"
+          cp "$INSTALLER" changed.exe && printf 'x' >> changed.exe
+          if node actions/updater/updater.mjs verify --installer changed.exe --sig "$sig" --manifest updater-out/latest.json --pubkey "$PUBKEY" --version 0.1.0 --url "$URL"; then
+            echo 'a changed installer passed' >&2; exit 1
+          fi
+          if node actions/updater/updater.mjs verify --installer "$INSTALLER" --sig "$sig" --manifest updater-out/latest.json --pubkey "$PUBKEY" --version 0.1.1 --url "$URL"; then
+            echo 'another version passed' >&2; exit 1
+          fi
+
       - name: What the hook was given
         if: always()
         shell: pwsh

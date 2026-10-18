@@ -17,3 +17,10 @@ All notable changes to this project are documented here. The format follows
 - `actions/bundle` (bundle without re-patching; collect or substitute what only the bundle produces) and
   `actions/verify` (install and check every installed file's signature).
 - `self-test.yml`: both actions end to end on `tests/fixture` with a certificate made for the test.
+- The updater stage, for apps that update through tauri-plugin-updater (`updater: true`): `updater-sign`
+  makes the updater signature over the signed installer, bound to the version, and writes `latest.json`
+  pointing at the installer asset of the release — the updater key reaches that job only, as an explicit
+  secret; `verify-updater` checks both with the public key the app carries, as the installed app will;
+  the draft carries them and is checked to hold the asset `latest.json` points at. `actions/updater`
+  (sign or verify — the check needs nothing installed). The bundling passes no longer make updater
+  artifacts whatever the caller's overlays say: there is no key there, and the installer is signed later.

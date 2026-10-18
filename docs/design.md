@@ -1,6 +1,6 @@
 # Design — the first workflow
 
-Status: built — `.github/workflows/windows.yml` with `actions/bundle` and `actions/verify`; unreleased. The updater stage is not built yet.
+Status: built — `.github/workflows/windows.yml` with `actions/bundle`, `actions/verify` and `actions/updater` (the updater stage, for apps on tauri-plugin-updater); unreleased.
 
 ## The problem
 
@@ -31,8 +31,13 @@ bundle-2         no credential   bundle again; the sign hook puts the signed uni
 sign-installer   code-sign       sign.yml on the one installer
 verify           no credential   install the installer into a temporary folder and check every
                                  installed executable's Authenticode signature, the
-                                 uninstaller's included; check the updater signature
-draft            contents: write updater signature over the signed installer, latest.json, a draft
+                                 uninstaller's included
+updater-sign     updater key     (updater: true) the updater signature over the signed installer,
+                                 bound to the version, and latest.json — no other permission
+verify-updater   no credential   (updater: true) the signature checked with the public key the
+                                 app carries, latest.json's version, signature and URL
+draft            contents: write a draft carrying the installer (and the .sig and latest.json),
+                                 checked to hold the asset latest.json points at
 ```
 
 - `--no-binary-patching` is required whenever executables are signed before bundling: patching
@@ -81,7 +86,7 @@ Everything a caller differs in arrives as an input; nothing defaults to a caller
 | Build-time values | names of secrets the build reads (a diagnostics connection, say), passed through as environment |
 | Signing | the fixed list of files to sign, relative to the app; signature description and URL |
 | Bundle | extra `--config` overlays; bundles (`nsis`); target |
-| Updater | on or off; the updater key secrets; where `latest.json` points |
+| Updater | `updater` on or off; `version`; `updater-pubkey`; the key as the secrets `updater-key` and `updater-key-password` (explicit, not `secrets: inherit` — only `updater-sign` sees them); `latest.json` points at the installer asset of the release tagged `tag` |
 | Variants | an offline installer that carries the WebView2 runtime, on or off |
 | Verification | the installed files that must be signed (default: every `.exe` and `.dll`) |
 | Release | tag, title, notes file, asset names and a version-free alias |

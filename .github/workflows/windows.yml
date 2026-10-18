@@ -8,6 +8,12 @@ name: Windows release (reusable)
 #   → sign-extras (code-sign) → bundle-2: put them in signed (no credential) → sign-installer (code-sign)
 #   → verify: install and check every installed file's signature (no credential) → draft (optional)
 #
+# For an app that updates through tauri-plugin-updater (updater: true), after sign-installer:
+#
+#   updater-sign: the updater signature over the signed installer, bound to the version, and latest.json
+#   (the updater key, in this job only, with no other permission) → verify-updater: both checked with
+#   the public key, as the installed app will (no credential) → the draft carries them
+#
 #   jobs:
 #     release:
 #       needs: build
@@ -21,6 +27,10 @@ name: Windows release (reusable)
 #         bundle-artifact: bundle-input
 #         app-dir: my-app
 #         tauri-cli: '@tauri-apps/cli@2.12.1'
+#         # with updater: true, also version, updater-pubkey and tag, and the key as a secret:
+#       # secrets:
+#       #   updater-key: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+#       #   updater-key-password: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 #
 # The steps of this repository come from the same commit as this file (job.workflow_sha), so pinning
 # this workflow pins them too. Every third-party action is pinned to a commit; the tag is in the comment.
@@ -103,6 +113,28 @@ on:
         required: false
         type: string
         default: ''
+      updater:
+        description: The app updates through tauri-plugin-updater — sign the installer for it and write latest.json (needs version, updater-pubkey, tag and the updater-key secret).
+        required: false
+        type: boolean
+        default: false
+      version:
+        description: With updater — the version the release carries (the updater signature is bound to it).
+        required: false
+        type: string
+        default: ''
+      updater-pubkey:
+        description: With updater — the public key the app carries (plugins.updater.pubkey), to check the signature with.
+        required: false
+        type: string
+        default: ''
+    secrets:
+      updater-key:
+        description: With updater — the updater private key (what tauri signer generate wrote). Only the updater-sign job sees it.
+        required: false
+      updater-key-password:
+        description: With updater — the updater key's password, if it has one.
+        required: false
     outputs:
       installer:
         description: File name of the signed installer.
@@ -301,9 +333,99 @@ jobs:
           installer: dist/${{ needs.bundle-2.outputs.installer }}
           unsigned-ok: ${{ inputs.unsigned-ok }}
 
+  # The updater signature is made over the Authenticode-signed bytes (any later change breaks it), and
+  # the updater key is in this job only. latest.json points at the installer's asset in the release
+  # tagged `tag` of the calling repository (GitHub turns spaces in asset names into dots).
+  updater-sign:
+    if: ${{ inputs.updater }}
+    needs: [bundle-2, sign-installer]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions: {}
+    outputs:
+      url: ${{ steps.url.outputs.url }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .tauri-release
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ inputs.installer-artifact }}
+          path: dist
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ inputs.node-version }}
+      - id: url
+        env:
+          INSTALLER: ${{ needs.bundle-2.outputs.installer }}
+          VERSION: ${{ inputs.version }}
+          PUBKEY: ${{ inputs.updater-pubkey }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          [ -n "$VERSION" ] || { echo 'updater needs the version input' >&2; exit 1; }
+          [ -n "$PUBKEY" ] || { echo 'updater needs the updater-pubkey input' >&2; exit 1; }
+          [ -n "$TAG" ] || { echo 'updater needs the tag input (latest.json points at its release)' >&2; exit 1; }
+          echo "url=https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/${INSTALLER// /.}" >> "$GITHUB_OUTPUT"
+      - uses: ./.tauri-release/actions/updater
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.updater-key }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.updater-key-password }}
+        with:
+          mode: sign
+          installer: dist/${{ needs.bundle-2.outputs.installer }}
+          version: ${{ inputs.version }}
+          url: ${{ steps.url.outputs.url }}
+          notes: ${{ inputs.notes }}
+          tauri-cli: ${{ inputs.tauri-cli }}
+          out-dir: ${{ runner.temp }}/updater
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tauri-release-updater
+          path: ${{ runner.temp }}/updater
+          if-no-files-found: error
+          retention-days: 1
+
+  verify-updater:
+    needs: [bundle-2, updater-sign]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .tauri-release
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ inputs.installer-artifact }}
+          path: dist
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: tauri-release-updater
+          path: updater
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ inputs.node-version }}
+      - uses: ./.tauri-release/actions/updater
+        with:
+          mode: verify
+          installer: dist/${{ needs.bundle-2.outputs.installer }}
+          version: ${{ inputs.version }}
+          url: ${{ needs.updater-sign.outputs.url }}
+          sig: updater/${{ needs.bundle-2.outputs.installer }}.sig
+          manifest: updater/latest.json
+          pubkey: ${{ inputs.updater-pubkey }}
+
+  # With updater, the draft waits for the updater check and carries the .sig and latest.json; without
+  # it, verify-updater is skipped and the draft goes as before.
   draft:
-    if: ${{ inputs.draft }}
-    needs: [bundle-2, verify]
+    if: ${{ inputs.draft && !cancelled() && needs.verify.result == 'success' && (!inputs.updater || needs.verify-updater.result == 'success') }}
+    needs: [bundle-2, verify, verify-updater]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -313,6 +435,11 @@ jobs:
         with:
           name: ${{ inputs.installer-artifact }}
           path: dist
+      - if: ${{ inputs.updater }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: tauri-release-updater
+          path: dist
       - name: Create the draft release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -321,15 +448,23 @@ jobs:
           TITLE: ${{ inputs.title }}
           NOTES: ${{ inputs.notes }}
           ALIAS: ${{ inputs.alias }}
+          UPDATER: ${{ inputs.updater }}
         run: |
           if [ -z "$TAG" ]; then echo 'a draft needs a tag' >&2; exit 1; fi
           if [ -n "$ALIAS" ]; then cp "dist/$INSTALLER" "dist/$ALIAS"; fi
           gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --draft --title "${TITLE:-$TAG}" --notes "$NOTES"
+          if [ "$UPDATER" = true ]; then
+            # latest.json points at the asset by the name GitHub gave it: check that name is there.
+            assets="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
+            for want in "${INSTALLER// /.}" latest.json; do
+              grep -qxF "$want" <<< "$assets" || { echo "the draft has no asset named $want, so latest.json would point at nothing" >&2; exit 1; }
+            done
+          fi
 
   # Intermediate artifacts are not kept past the run; the signed installer stays for its retention.
   cleanup:
     if: ${{ always() }}
-    needs: [bundle-1, bundle-2, verify]
+    needs: [bundle-1, bundle-2, verify, verify-updater]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions: {}
@@ -341,4 +476,5 @@ jobs:
             tauri-release-extras
             tauri-release-signed-extras
             tauri-release-unsigned-installer
+            tauri-release-updater
           failOnError: false

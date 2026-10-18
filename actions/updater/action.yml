@@ -1,0 +1,86 @@
+name: Updater signature and latest.json
+description: >-
+  For apps that update through tauri-plugin-updater. `sign` makes the updater signature over the
+  installer as it is (run it on the Authenticode-signed installer — any later change to the bytes breaks
+  it), bound to the version, and writes latest.json pointing at the installer's release asset. The
+  updater key comes from the step's environment (TAURI_SIGNING_PRIVATE_KEY, and
+  TAURI_SIGNING_PRIVATE_KEY_PASSWORD when the key has one) — give it only to that step. `verify` checks
+  all of it with the public key, as the installed app will, and needs no secret.
+
+inputs:
+  mode:
+    description: "`sign` or `verify`."
+    required: true
+  installer:
+    description: Path of the signed installer.
+    required: true
+  version:
+    description: The version the release carries — the signature is bound to it, and latest.json says it.
+    required: true
+  url:
+    description: Where the installed app downloads the installer (the release asset's download URL).
+    required: true
+  out-dir:
+    description: For `sign` — where the .sig and latest.json are written.
+    required: false
+    default: ''
+  notes:
+    description: For `sign` — notes latest.json carries; empty for none.
+    required: false
+    default: ''
+  tauri-cli:
+    description: For `sign` — the Tauri CLI as an npm spec, e.g. @tauri-apps/cli@2.12.1.
+    required: false
+    default: ''
+  sig:
+    description: For `verify` — path of the .sig file.
+    required: false
+    default: ''
+  manifest:
+    description: For `verify` — path of latest.json.
+    required: false
+    default: ''
+  pubkey:
+    description: For `verify` — the public key the app carries (plugins.updater.pubkey).
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - if: ${{ inputs.mode == 'sign' }}
+      shell: bash
+      env:
+        INSTALLER: ${{ inputs.installer }}
+        VERSION: ${{ inputs.version }}
+        URL: ${{ inputs.url }}
+        OUT: ${{ inputs.out-dir }}
+        NOTES: ${{ inputs.notes }}
+        TAURI_CLI: ${{ inputs.tauri-cli }}
+        SCRIPT: ${{ github.action_path }}/updater.mjs
+      run: |
+        set -euo pipefail
+        if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then echo 'no updater key in TAURI_SIGNING_PRIVATE_KEY' >&2; exit 1; fi
+        if [ -z "$OUT" ] || [ -z "$TAURI_CLI" ]; then echo 'sign needs out-dir and tauri-cli' >&2; exit 1; fi
+        mkdir -p "$OUT"
+        export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}"
+        npx --yes "$TAURI_CLI" signer sign --app-version "$VERSION" "$INSTALLER"
+        name="$(basename "$INSTALLER")"
+        mv "$INSTALLER.sig" "$OUT/$name.sig"
+        node "$SCRIPT" manifest --installer "$INSTALLER" --sig "$OUT/$name.sig" --version "$VERSION" --url "$URL" --notes "$NOTES" --out "$OUT/latest.json"
+    - if: ${{ inputs.mode == 'verify' }}
+      shell: bash
+      env:
+        INSTALLER: ${{ inputs.installer }}
+        VERSION: ${{ inputs.version }}
+        URL: ${{ inputs.url }}
+        SIG: ${{ inputs.sig }}
+        MANIFEST: ${{ inputs.manifest }}
+        PUBKEY: ${{ inputs.pubkey }}
+        SCRIPT: ${{ github.action_path }}/updater.mjs
+      run: |
+        set -euo pipefail
+        node "$SCRIPT" verify --installer "$INSTALLER" --sig "$SIG" --manifest "$MANIFEST" --pubkey "$PUBKEY" --version "$VERSION" --url "$URL"
+    - if: ${{ inputs.mode != 'sign' && inputs.mode != 'verify' }}
+      shell: bash
+      run: echo "mode must be sign or verify" >&2; exit 1
