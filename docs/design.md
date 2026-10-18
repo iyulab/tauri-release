@@ -86,8 +86,8 @@ Everything a caller differs in arrives as an input; nothing defaults to a caller
 | Build-time values | names of secrets the build reads (a diagnostics connection, say), passed through as environment |
 | Signing | the fixed list of files to sign, relative to the app; signature description and URL |
 | Bundle | extra `--config` overlays; bundles (`nsis`); target |
-| Updater | `updater` on or off; `version`; `updater-pubkey`; the key as the secrets `updater-key` and `updater-key-password` (explicit, not `secrets: inherit` — only `updater-sign` sees them); `latest.json` points at the installer asset of the release tagged `tag` |
-| Variants | an offline installer that carries the WebView2 runtime, on or off |
+| Updater | `updater` on or off; `version`; `updater-pubkey`; the key as the secrets `updater-key` and `updater-key-password` (explicit, not `secrets: inherit` — only `updater-sign` sees them); `updater-environment` when the key is an environment secret (it resolves only in a job of that environment); `latest.json` points at the installer asset of the release tagged `tag` |
+| Variants | a second call with the variant's `--config` overlay and its own `installer-artifact`, after the first (the intermediate artifacts share names) — the caller adds that installer to the draft |
 | Verification | the installed files that must be signed (default: every `.exe` and `.dll`) |
 | Release | tag, title, notes file, asset names and a version-free alias |
 

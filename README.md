@@ -30,8 +30,13 @@ made of two composite actions that can be used on their own:
 made for the test standing in for code-sign. Signing itself stays in code-sign; this repository only
 calls it.
 
-**Status:** unreleased. Not yet here: the updater signature and `latest.json` (step 6 for an app
-that uses Tauri's updater). See [SCOPE.md](SCOPE.md) for what belongs here, and
+For an app that updates through Tauri's updater (`updater: true`), the workflow also makes the
+updater signature over the signed installer and writes `latest.json`; the updater key reaches that
+job only. A variant of the installer — one that carries the WebView2 installer, say — is a second
+call with its `--config` overlay and its own `installer-artifact`, after the first: the calls share
+the names of their intermediate artifacts.
+
+**Status:** unreleased. See [SCOPE.md](SCOPE.md) for what belongs here, and
 [docs/design.md](docs/design.md) for the design.
 
 ## License

@@ -27,7 +27,8 @@ name: Windows release (reusable)
 #         bundle-artifact: bundle-input
 #         app-dir: my-app
 #         tauri-cli: '@tauri-apps/cli@2.12.1'
-#         # with updater: true, also version, updater-pubkey and tag, and the key as a secret:
+#         # with updater: true, also version, updater-pubkey and tag, and the key as a secret
+#         # (updater-environment names the environment when the key is an environment secret):
 #       # secrets:
 #       #   updater-key: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
 #       #   updater-key-password: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -125,6 +126,11 @@ on:
         default: ''
       updater-pubkey:
         description: With updater — the public key the app carries (plugins.updater.pubkey), to check the signature with.
+        required: false
+        type: string
+        default: ''
+      updater-environment:
+        description: With updater — the calling repository's environment that holds the updater key, when it is an environment secret (it reaches a called workflow only in a job that names its environment); empty for a repository secret.
         required: false
         type: string
         default: ''
@@ -341,6 +347,8 @@ jobs:
     needs: [bundle-2, sign-installer]
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # An environment secret passed by name resolves only in a job of that environment (empty: none).
+    environment: ${{ inputs.updater-environment }}
     permissions: {}
     outputs:
       url: ${{ steps.url.outputs.url }}
@@ -452,7 +460,8 @@ jobs:
         run: |
           if [ -z "$TAG" ]; then echo 'a draft needs a tag' >&2; exit 1; fi
           if [ -n "$ALIAS" ]; then cp "dist/$INSTALLER" "dist/$ALIAS"; fi
-          gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --draft --title "${TITLE:-$TAG}" --notes "$NOTES"
+          # The tag is made on the commit this run built, not on whatever the default branch holds when it is published.
+          gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --draft --target "$GITHUB_SHA" --title "${TITLE:-$TAG}" --notes "$NOTES"
           if [ "$UPDATER" = true ]; then
             # latest.json points at the asset by the name GitHub gave it: check that name is there.
             assets="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"

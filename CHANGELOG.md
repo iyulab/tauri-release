@@ -24,3 +24,11 @@ All notable changes to this project are documented here. The format follows
   the draft carries them and is checked to hold the asset `latest.json` points at. `actions/updater`
   (sign or verify — the check needs nothing installed). The bundling passes no longer make updater
   artifacts whatever the caller's overlays say: there is no key there, and the installer is signed later.
+- `updater-environment`: the caller's environment holding the updater key, for a key kept as an
+  environment secret — passed by name, such a secret resolves only in a job that names its environment,
+  and was otherwise empty.
+
+### Fixed
+
+- The draft's tag is made on the commit the run built (`--target`), not on the default branch's head at
+  the time it is published.
