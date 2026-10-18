@@ -470,10 +470,11 @@ jobs:
             done
           fi
 
-  # Intermediate artifacts are not kept past the run; the signed installer stays for its retention.
+  # Intermediate artifacts are not kept past the run; the signed installer stays for its retention. After the
+  # draft too: it takes the updater signature and latest.json from one of them.
   cleanup:
     if: ${{ always() }}
-    needs: [bundle-1, bundle-2, verify, verify-updater]
+    needs: [bundle-1, bundle-2, verify, verify-updater, draft]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions: {}

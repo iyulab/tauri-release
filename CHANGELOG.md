@@ -30,5 +30,7 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- With `updater` and `draft` together, the cleanup no longer removes the updater signature and `latest.json` before
+  the draft takes them: it waits for the draft (the draft failed with the artifact not found).
 - The draft's tag is made on the commit the run built (`--target`), not on the default branch's head at
   the time it is published.
