@@ -34,7 +34,9 @@ For an app that updates through Tauri's updater (`updater: true`), the workflow 
 updater signature over the signed installer and writes `latest.json`; the updater key reaches that
 job only. A variant of the installer — one that carries the WebView2 installer, say — is a second
 call with its `--config` overlay and its own `installer-artifact`, after the first: the calls share
-the names of their intermediate artifacts.
+the names of their intermediate artifacts. A calling job grants what the jobs inside ask for —
+`id-token: write` for the signing jobs and `contents: write` for the draft job, even with `draft: false`: a run
+whose called jobs ask for more than the caller grants does not start.
 
 **Status:** unreleased. See [SCOPE.md](SCOPE.md) for what belongs here, and
 [docs/design.md](docs/design.md) for the design.
