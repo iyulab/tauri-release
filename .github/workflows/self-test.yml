@@ -234,7 +234,10 @@ jobs:
   macos-workflow:
     needs: macos
     uses: ./.github/workflows/macos.yml
-    permissions: {}
+    # What the called draft job asks for, granted even though no draft is made: a run whose called jobs
+    # ask for more than the caller grants does not start.
+    permissions:
+      contents: write
     with:
       bundle-artifact: self-test-macos-bundle
       bundle-file: Fixture.app.tar
