@@ -1,0 +1,29 @@
+name: Check a macOS release
+description: >-
+  Checks the disk image and the update archive of a macOS release: the bundle inside the image is the
+  one in the archive, file for file, and its signature holds, strictly and with nested code. With a
+  team ID, the bundle and the image must each be a Developer ID signature of that team, notarized,
+  stapled, and accepted by Gatekeeper. Without one the build is ad hoc and the run is warned that it is
+  not for distribution.
+
+inputs:
+  image:
+    description: Path of the disk image.
+    required: true
+  archive:
+    description: Path of the update archive.
+    required: true
+  team:
+    description: The Apple team ID the signatures must name; empty for an ad hoc build.
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+        ARCHIVE: ${{ inputs.archive }}
+        TEAM: ${{ inputs.team }}
+      run: '"$GITHUB_ACTION_PATH/verify.sh" --image "$IMAGE" --archive "$ARCHIVE" --team "$TEAM"'

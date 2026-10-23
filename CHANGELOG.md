@@ -15,6 +15,10 @@ All notable changes to this project are documented here. The format follows
   Mach-O file re-signed deepest first in a signing job, notarized, stapled in the no-credential jobs, a disk image and
   an update archive, a verification of the stapled copies; the signing and notarizing stages skipped while their
   inputs are empty.
+- `actions/macos-image` and `actions/macos-verify`: the macOS packaging (staple, disk image with `hdiutil`, update
+  archive) and its check (the image's bundle equals the archive's, the signature holds strictly with nested code, and
+  with a team ID a notarized, stapled Developer ID signature Gatekeeper accepts). `self-test.yml` runs both on an ad
+  hoc bundle of the fixture, with a changed bundle and an unmet team refused.
 - `.github/workflows/windows.yml`: the Windows release as a reusable workflow — sign the built files,
   bundle, sign the uninstaller and NSIS plugins, bundle again with them, sign the installer, check the
   installed copy, and optionally draft a release.

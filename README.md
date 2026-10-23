@@ -26,6 +26,14 @@ made of two composite actions that can be used on their own:
 - `actions/verify` — install the installer silently and check the signature of every installed
   executable and DLL, the uninstaller included; then uninstall.
 
+For macOS, two more actions (the workflow around them is designed in [docs/design.md](docs/design.md)):
+
+- `actions/macos-image` — from a signed bundle, the compressed disk image and the update archive,
+  stapling the notarization ticket first when the bundle is notarized; nothing is signed here.
+- `actions/macos-verify` — the bundle inside the image is the one in the archive, file for file, and
+  its signature holds; with a team ID, both are a notarized, stapled Developer ID signature of that
+  team that Gatekeeper accepts.
+
 `.github/workflows/self-test.yml` runs both on a Tauri app with nothing in it, with a certificate
 made for the test standing in for code-sign. Signing itself stays in code-sign; this repository only
 calls it.

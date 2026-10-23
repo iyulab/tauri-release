@@ -163,3 +163,59 @@ jobs:
             $log = Join-Path $env:RUNNER_TEMP "$d/hook.log"
             "== $d"; if (Test-Path $log) { Get-Content $log } else { '(never called)' }
           }
+
+  # The macOS packaging and check (actions/macos-image, actions/macos-verify) on the same app, ad hoc
+  # signed — the path a release takes before a Developer ID exists: image and archive, then the check;
+  # a changed bundle and a team ID the ad hoc signature cannot meet are refused.
+  macos:
+    runs-on: macos-latest          # hdiutil, codesign
+    timeout-minutes: 30
+    env:
+      TAURI_CLI: '@tauri-apps/cli@2.12.1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+
+      - name: An ad hoc signed bundle
+        working-directory: tests/fixture
+        run: |
+          npx --yes "$TAURI_CLI" icon app-icon.png
+          npx --yes "$TAURI_CLI" build --bundles app --config '{"bundle":{"icon":["icons/32x32.png","icons/128x128.png","icons/icon.icns"],"macOS":{"signingIdentity":"-"}}}'
+
+      - id: image
+        uses: ./actions/macos-image
+        with:
+          bundle: tests/fixture/src-tauri/target/release/bundle/macos/Fixture.app
+          out-dir: ${{ runner.temp }}/release
+          volume: Fixture
+
+      - uses: ./actions/macos-verify
+        with:
+          image: ${{ steps.image.outputs.image }}
+          archive: ${{ steps.image.outputs.archive }}
+
+      - name: A changed bundle and an unmet team are refused
+        env:
+          IMAGE: ${{ steps.image.outputs.image }}
+          ARCHIVE: ${{ steps.image.outputs.archive }}
+        run: |
+          changed="$RUNNER_TEMP/changed"
+          mkdir -p "$changed"
+          ditto tests/fixture/src-tauri/target/release/bundle/macos/Fixture.app "$changed/Fixture.app"
+          printf 'x' >> "$changed/Fixture.app/Contents/Info.plist"
+          COPYFILE_DISABLE=1 tar --no-mac-metadata -czf "$changed.tar.gz" -C "$changed" Fixture.app
+          if actions/macos-verify/verify.sh --image "$IMAGE" --archive "$changed.tar.gz"; then
+            echo 'an archive of a changed bundle passed' >&2; exit 1
+          fi
+          if actions/macos-verify/verify.sh --image "$IMAGE" --archive "$ARCHIVE" --team A1B2C3D4E5; then
+            echo 'an ad hoc build passed as a Developer ID signature' >&2; exit 1
+          fi

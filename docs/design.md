@@ -1,6 +1,6 @@
 # Design — the first workflow
 
-Status: Windows built — `.github/workflows/windows.yml` with `actions/bundle`, `actions/verify` and `actions/updater` (the updater stage, for apps on tauri-plugin-updater); unreleased. macOS designed (below), not built.
+Status: Windows built — `.github/workflows/windows.yml` with `actions/bundle`, `actions/verify` and `actions/updater` (the updater stage, for apps on tauri-plugin-updater); unreleased. macOS: the packaging and check actions built, the workflow designed (below).
 
 ## The problem
 
@@ -93,14 +93,16 @@ Everything a caller differs in arrives as an input; nothing defaults to a caller
 
 ## macOS
 
-Status: designed — not built. The same rule as on Windows: the job that holds a signing credential
+Status: `actions/macos-image` (staple, disk image, update archive) and `actions/macos-verify` built and
+self-tested on an ad hoc bundle; the workflow and its signing stages not yet. The same rule as on Windows: the job that holds a signing credential
 runs nothing of the app.
 
 ### Stages and where the credential is
 
 ```
 build            no credential   the caller's: build the app and its helpers, and the bundle
-                                 (`--bundles app`) with no signing identity — an ad hoc bundle;
+                                 (`--bundles app`) signed ad hoc (`signingIdentity` `-` — a bundle
+                                 left unsigned has no sealed resources and fails every check);
                                  hand it out as a tar archive (an uploaded folder loses the
                                  symbolic links and modes a bundle's frameworks need)
 sign-bundle      macOS signing   re-sign every Mach-O file inside the bundle, deepest first, with

@@ -1,0 +1,53 @@
+name: macOS disk image and update archive
+description: >-
+  Packages a macOS app bundle for release without signing anything: staples its notarization ticket
+  when asked, then makes the compressed disk image a person opens (the bundle and a link to
+  Applications, with hdiutil — no Finder automation) and the update archive (`<App>.app.tar.gz`, the
+  same bundle with its symbolic links and modes). Both carry whatever signature the bundle has.
+
+inputs:
+  bundle:
+    description: Path of the app bundle (`.app`), signed — ad hoc at least (`bundle.macOS.signingIdentity` `-`).
+    required: true
+  out-dir:
+    description: Where the image and the archive are written.
+    required: true
+  volume:
+    description: The disk image's volume name.
+    required: true
+  image:
+    description: The disk image's file name; empty for `<App>.dmg`.
+    required: false
+    default: ''
+  archive:
+    description: The update archive's file name; empty for `<App>.app.tar.gz`.
+    required: false
+    default: ''
+  staple:
+    description: "`true` to staple the bundle's notarization ticket first — for a notarized bundle."
+    required: false
+    default: 'false'
+
+outputs:
+  image:
+    description: Path of the disk image.
+    value: ${{ steps.image.outputs.image }}
+  archive:
+    description: Path of the update archive.
+    value: ${{ steps.image.outputs.archive }}
+
+runs:
+  using: composite
+  steps:
+    - id: image
+      shell: bash
+      env:
+        BUNDLE: ${{ inputs.bundle }}
+        OUT_DIR: ${{ inputs.out-dir }}
+        VOLUME: ${{ inputs.volume }}
+        IMAGE: ${{ inputs.image }}
+        ARCHIVE: ${{ inputs.archive }}
+        STAPLE: ${{ inputs.staple }}
+      run: |
+        "$GITHUB_ACTION_PATH/image.sh" --bundle "$BUNDLE" --out "$OUT_DIR" --volume "$VOLUME" \
+          --image "$IMAGE" --archive "$ARCHIVE" --staple "$STAPLE" | tee -a "$GITHUB_OUTPUT"
