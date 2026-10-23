@@ -213,9 +213,10 @@ jobs:
           ditto tests/fixture/src-tauri/target/release/bundle/macos/Fixture.app "$changed/Fixture.app"
           printf 'x' >> "$changed/Fixture.app/Contents/Info.plist"
           COPYFILE_DISABLE=1 tar --no-mac-metadata -czf "$changed.tar.gz" -C "$changed" Fixture.app
-          if actions/macos-verify/verify.sh --image "$IMAGE" --archive "$changed.tar.gz"; then
+          # Their ::error:: lines are expected here; keep them out of the run's annotations.
+          if actions/macos-verify/verify.sh --image "$IMAGE" --archive "$changed.tar.gz" >/dev/null 2>&1; then
             echo 'an archive of a changed bundle passed' >&2; exit 1
           fi
-          if actions/macos-verify/verify.sh --image "$IMAGE" --archive "$ARCHIVE" --team A1B2C3D4E5; then
+          if actions/macos-verify/verify.sh --image "$IMAGE" --archive "$ARCHIVE" --team A1B2C3D4E5 >/dev/null 2>&1; then
             echo 'an ad hoc build passed as a Developer ID signature' >&2; exit 1
           fi
