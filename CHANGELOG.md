@@ -19,6 +19,10 @@ All notable changes to this project are documented here. The format follows
   archive) and its check (the image's bundle equals the archive's, the signature holds strictly with nested code, and
   with a team ID a notarized, stapled Developer ID signature Gatekeeper accepts). `self-test.yml` runs both on an ad
   hoc bundle of the fixture, with a changed bundle and an unmet team refused.
+- `.github/workflows/macos.yml`: the macOS release as a reusable workflow — the caller's ad hoc bundle (a tar archive in
+  an artifact) packaged into the disk image and the update archive, checked, and optionally put in a draft (added to the
+  tag's draft when the Windows call made it first), which says the files are not for distribution. The Developer ID
+  signing and notarizing jobs are not in it yet. `self-test.yml` calls it on the fixture's bundle.
 - `.github/workflows/windows.yml`: the Windows release as a reusable workflow — sign the built files,
   bundle, sign the uninstaller and NSIS plugins, bundle again with them, sign the installer, check the
   installed copy, and optionally draft a release.

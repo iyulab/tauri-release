@@ -9,7 +9,7 @@ name: Self-test
 on:
   push:
     branches: [main]
-    paths: ['actions/**', 'tests/fixture/**', '.github/workflows/self-test.yml']
+    paths: ['actions/**', 'tests/fixture/**', '.github/workflows/self-test.yml', '.github/workflows/macos.yml']
   workflow_dispatch:
 
 permissions:
@@ -191,6 +191,15 @@ jobs:
           npx --yes "$TAURI_CLI" icon app-icon.png
           npx --yes "$TAURI_CLI" build --bundles app --config '{"bundle":{"icon":["icons/32x32.png","icons/128x128.png","icons/icon.icns"],"macOS":{"signingIdentity":"-"}}}'
 
+      - name: The bundle as a caller hands it to macos.yml
+        run: tar -cf "$RUNNER_TEMP/Fixture.app.tar" -C tests/fixture/src-tauri/target/release/bundle/macos Fixture.app
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: self-test-macos-bundle
+          path: ${{ runner.temp }}/Fixture.app.tar
+          retention-days: 1
+
       - id: image
         uses: ./actions/macos-image
         with:
@@ -220,3 +229,14 @@ jobs:
           if actions/macos-verify/verify.sh --image "$IMAGE" --archive "$ARCHIVE" --team A1B2C3D4E5 >/dev/null 2>&1; then
             echo 'an ad hoc build passed as a Developer ID signature' >&2; exit 1
           fi
+
+  # The reusable workflow end to end on the bundle the job above built (no draft).
+  macos-workflow:
+    needs: macos
+    uses: ./.github/workflows/macos.yml
+    permissions: {}
+    with:
+      bundle-artifact: self-test-macos-bundle
+      bundle-file: Fixture.app.tar
+      volume: Fixture
+      release-artifact: self-test-macos-release

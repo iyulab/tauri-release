@@ -26,7 +26,9 @@ made of two composite actions that can be used on their own:
 - `actions/verify` — install the installer silently and check the signature of every installed
   executable and DLL, the uninstaller included; then uninstall.
 
-For macOS, two more actions (the workflow around them is designed in [docs/design.md](docs/design.md)):
+For macOS, `.github/workflows/macos.yml` packages and checks a bundle the caller built and signed ad hoc — the Developer
+ID signing and notarizing jobs designed in [docs/design.md](docs/design.md) are not in it yet, so what it makes is not for
+distribution. It is made of two actions:
 
 - `actions/macos-image` — from a signed bundle, the compressed disk image and the update archive,
   stapling the notarization ticket first when the bundle is notarized; nothing is signed here.

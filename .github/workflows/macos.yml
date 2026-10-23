@@ -1,0 +1,201 @@
+name: macOS release (reusable)
+
+# Packages a Tauri app for macOS and checks what it made. The caller builds (no credential) and hands
+# over its app bundle, signed ad hoc (bundle.macOS.signingIdentity "-"), as a tar archive in an
+# artifact — an uploaded folder would lose the symbolic links and modes a bundle needs. Then:
+#
+#   package: the disk image and the update archive (no credential)
+#   → verify: the image's bundle is the archive's, file for file, and its signature holds (no credential)
+#   → draft (optional — added to the tag's draft when the Windows call made it first)
+#
+# Signing with a Developer ID and notarizing go between the two, in jobs of their own that hold the
+# credential and run nothing of the app (docs/design.md, "macOS"). They are not here yet: they call the
+# organization's macOS signing layer, which does not exist yet. Until then a release made with this
+# workflow is ad hoc — fine for testing on a Mac that allows it, not for distribution — and its draft
+# says so.
+#
+#   jobs:
+#     release:
+#       needs: build
+#       uses: iyulab/tauri-release/.github/workflows/macos.yml@<sha> # <tag>
+#       permissions:
+#         contents: write     # only with draft: true
+#       with:
+#         bundle-artifact: macos-bundle
+#         bundle-file: MyApp.app.tar
+#         volume: MyApp
+#
+# The steps of this repository come from the same commit as this file (job.workflow_sha), so pinning
+# this workflow pins them too. Every third-party action is pinned to a commit; the tag is in the comment.
+
+on:
+  workflow_call:
+    inputs:
+      bundle-artifact:
+        description: Artifact (from the calling run) holding the app bundle as a tar archive.
+        required: true
+        type: string
+      bundle-file:
+        description: The tar archive's file name inside the artifact (it holds one `.app` at its root; gzip or not).
+        required: true
+        type: string
+      volume:
+        description: The disk image's volume name, e.g. the product name.
+        required: true
+        type: string
+      image:
+        description: The disk image's file name; empty for `<App>.dmg`.
+        required: false
+        type: string
+        default: ''
+      archive:
+        description: The update archive's file name; empty for `<App>.app.tar.gz`.
+        required: false
+        type: string
+        default: ''
+      release-artifact:
+        description: Name the disk image and the update archive are uploaded as.
+        required: false
+        type: string
+        default: macos-release
+      draft:
+        description: Create a draft GitHub Release in the calling repository from the disk image and the update archive.
+        required: false
+        type: boolean
+        default: false
+      tag:
+        description: For a draft — its tag.
+        required: false
+        type: string
+        default: ''
+      title:
+        description: For a draft — its title.
+        required: false
+        type: string
+        default: ''
+      notes:
+        description: For a draft — its notes.
+        required: false
+        type: string
+        default: ''
+      alias:
+        description: For a draft — a second, version-free name for the disk image (a stable download link); empty for none.
+        required: false
+        type: string
+        default: ''
+    outputs:
+      image:
+        description: File name of the disk image.
+        value: ${{ jobs.package.outputs.image }}
+      archive:
+        description: File name of the update archive.
+        value: ${{ jobs.package.outputs.archive }}
+
+permissions: {}
+
+jobs:
+  package:
+    runs-on: macos-latest          # hdiutil
+    timeout-minutes: 20
+    permissions: {}
+    outputs:
+      image: ${{ steps.names.outputs.image }}
+      archive: ${{ steps.names.outputs.archive }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .tauri-release
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ inputs.bundle-artifact }}
+          path: in
+      - id: bundle
+        name: Unpack the bundle
+        env:
+          BUNDLE_FILE: ${{ inputs.bundle-file }}
+        run: |
+          mkdir bundle
+          tar -xf "in/$BUNDLE_FILE" -C bundle
+          found=(bundle/*.app)
+          if [ ${#found[@]} -ne 1 ] || [ ! -d "${found[0]}" ]; then
+            echo "the archive must hold one .app at its root" >&2; exit 1
+          fi
+          echo "path=${found[0]}" >> "$GITHUB_OUTPUT"
+      - id: image
+        uses: ./.tauri-release/actions/macos-image
+        with:
+          bundle: ${{ steps.bundle.outputs.path }}
+          out-dir: out
+          volume: ${{ inputs.volume }}
+          image: ${{ inputs.image }}
+          archive: ${{ inputs.archive }}
+      - id: names
+        env:
+          IMAGE: ${{ steps.image.outputs.image }}
+          ARCHIVE: ${{ steps.image.outputs.archive }}
+        run: |
+          echo "image=$(basename "$IMAGE")" >> "$GITHUB_OUTPUT"
+          echo "archive=$(basename "$ARCHIVE")" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ inputs.release-artifact }}
+          path: out/
+          if-no-files-found: error
+
+  verify:
+    needs: package
+    runs-on: macos-latest          # hdiutil, codesign
+    timeout-minutes: 15
+    permissions: {}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .tauri-release
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ inputs.release-artifact }}
+          path: out
+      - uses: ./.tauri-release/actions/macos-verify
+        with:
+          image: out/${{ needs.package.outputs.image }}
+          archive: out/${{ needs.package.outputs.archive }}
+
+  draft:
+    if: ${{ inputs.draft && !cancelled() && needs.verify.result == 'success' }}
+    needs: [package, verify]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ inputs.release-artifact }}
+          path: dist
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE: ${{ needs.package.outputs.image }}
+          TAG: ${{ inputs.tag }}
+          TITLE: ${{ inputs.title }}
+          NOTES: ${{ inputs.notes }}
+          ALIAS: ${{ inputs.alias }}
+        run: |
+          if [ -z "$TAG" ]; then echo 'a draft needs a tag' >&2; exit 1; fi
+          if [ -n "$ALIAS" ]; then cp "dist/$IMAGE" "dist/$ALIAS"; fi
+          adhoc='The macOS files here are signed ad hoc — not for distribution.'
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            # An app released on Windows too: its call made the draft first; add to it.
+            gh release upload "$TAG" dist/* --repo "$GITHUB_REPOSITORY"
+            body="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body)"
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes "$(printf '%s\n\n%s' "$adhoc" "$body")"
+          else
+            # The tag is made on the commit this run built, not on whatever the default branch holds when it is published.
+            gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --draft --target "$GITHUB_SHA" --title "${TITLE:-$TAG}" --notes "$(printf '%s\n\n%s' "$adhoc" "$NOTES")"
+          fi
