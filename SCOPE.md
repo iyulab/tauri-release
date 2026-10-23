@@ -1,7 +1,7 @@
 # Scope
 
-tauri-release holds the release pipeline of a Tauri desktop app on Windows: the GitHub Actions
-steps from source to a draft release. This document draws the line around that job.
+tauri-release holds the release pipeline of a Tauri desktop app on Windows, and on macOS (designed in
+[docs/design.md](docs/design.md), not built yet): the GitHub Actions steps from source to a draft release. This document draws the line around that job.
 
 ## What it owns
 
@@ -29,5 +29,5 @@ steps from source to a draft release. This document draws the line around that j
 
 ## Admission
 
-A step belongs here when it is written the same way for an unrelated Tauri app on Windows and can
+A step belongs here when it is written the same way for an unrelated Tauri app on the same platform and can
 be stated without naming a caller — every constant it needs becomes an input.

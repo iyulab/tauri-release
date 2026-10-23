@@ -1,6 +1,6 @@
 # Design — the first workflow
 
-Status: built — `.github/workflows/windows.yml` with `actions/bundle`, `actions/verify` and `actions/updater` (the updater stage, for apps on tauri-plugin-updater); unreleased.
+Status: Windows built — `.github/workflows/windows.yml` with `actions/bundle`, `actions/verify` and `actions/updater` (the updater stage, for apps on tauri-plugin-updater); unreleased. macOS designed (below), not built.
 
 ## The problem
 
@@ -90,6 +90,76 @@ Everything a caller differs in arrives as an input; nothing defaults to a caller
 | Variants | a second call with the variant's `--config` overlay and its own `installer-artifact`, after the first (the intermediate artifacts share names) — the caller adds that installer to the draft |
 | Verification | the installed files that must be signed (default: every `.exe` and `.dll`) |
 | Release | tag, title, notes file, asset names and a version-free alias |
+
+## macOS
+
+Status: designed — not built. The same rule as on Windows: the job that holds a signing credential
+runs nothing of the app.
+
+### Stages and where the credential is
+
+```
+build            no credential   the caller's: build the app and its helpers, and the bundle
+                                 (`--bundles app`) with no signing identity — an ad hoc bundle;
+                                 hand it out as a tar archive (an uploaded folder loses the
+                                 symbolic links and modes a bundle's frameworks need)
+sign-bundle      macOS signing   re-sign every Mach-O file inside the bundle, deepest first, with
+                                 the hardened runtime, a timestamp and the entitlements the caller
+                                 names per file (a helper that compiles code at run time needs
+                                 `allow-jit`); then the bundle itself, which seals what is inside
+notarize-bundle  notary key      submit the signed bundle and wait for the verdict
+package          no credential   staple the bundle; make the compressed disk image (the bundle and
+                                 a link to Applications, with `hdiutil` — no Finder automation);
+                                 make the update archive (`<app>.app.tar.gz`) from the stapled bundle
+sign-image       macOS signing   sign the disk image
+notarize-image   notary key      submit the disk image and wait
+verify           no credential   staple the disk image; then check the stapled copies: the bundle's
+                                 signature, strictly and with nested code; Gatekeeper's assessment
+                                 of the bundle and of the image; each stapled ticket; that the
+                                 signing team is the one the caller names; that the bundle inside
+                                 the mounted image is the one in the update archive
+updater-sign     updater key     (updater: true) as on Windows, over the update archive
+draft            contents: write as on Windows
+```
+
+- **Signing after bundling is safe here.** Windows needs `--no-binary-patching` and two bundling
+  passes because the bundler rewrites and produces executables; on macOS the bundle's seal is
+  computed when the bundle itself is signed, so re-signing every file inside and then the bundle
+  replaces the ad hoc signatures completely. The bundler is never given the credential.
+- **The bundler's own signing is not used.** It signs the main executable and frameworks but not
+  every helper a bundle may carry (a native server, its libraries, a self-contained runtime), and it
+  would need the credential in the job that runs the toolchain.
+- **Stapling needs no credential**, so it runs in the no-credential jobs. A stapled ticket lets the
+  app's own update check confirm notarization with no network.
+- **Without the signing inputs** the signing and notarizing stages are skipped: the bundle stays ad
+  hoc, `verify` checks only that the ad hoc signature holds, and the draft says the build is not for
+  distribution. This is how the pipeline is exercised before a Developer ID exists.
+- **Runner**: GitHub-hosted `macos-latest` (Apple silicon). macOS minutes cost ten times Linux minutes
+  in a private repository, so the macOS jobs stay few: the stages above that need no macOS tool
+  (`draft`) run on Linux.
+
+### What the macOS signing stages need
+
+The signing credential (a Developer ID Application certificate) and the notary key (an App Store
+Connect API key) belong to the organization, like the Windows certificate: they are code-sign's to
+hold, behind a reusable workflow that signs and notarizes what it is handed and runs nothing else.
+code-sign has no such layer yet; it is requested once the certificate exists. Until then the inputs
+are empty and the stages are skipped.
+
+### Inputs (in addition to the shared ones)
+
+| Area | Inputs |
+|---|---|
+| Bundle | the bundle archive artifact; entitlements per file inside the bundle (paths relative to the bundle) |
+| Signing | the team ID the signature must name; nothing else — the identity and keys are the signing layer's |
+| Image | volume name; image file name and a version-free alias |
+| Updater | as on Windows; the manifest's platform key (`darwin-aarch64`). An app released on both platforms passes the Windows call's `latest.json` in, and the macOS call adds its platform to it |
+
+### Open
+
+- Whether the update archive is notarized as its own submission or carries the bundle's stapled
+  ticket only (the bundle inside is what runs, and it is stapled) — measured on the first signed run.
+- Universal (Intel and Apple silicon) bundles: not planned; arm64 only until a caller needs Intel.
 
 ## Not here
 
