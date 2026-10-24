@@ -25,6 +25,13 @@ tauri-release holds the release pipeline of a Tauri desktop app on Windows, and 
 - **Build the app's own code.** How a caller builds its helpers (a .NET publish, a Node bundle) is
   the caller's step; this repository runs it where the stage order says.
 - **Publish.** It produces a draft release. Making it public is a person's act.
+- **Check how the installed app behaves.** Verification here asks one question of what the
+  pipeline produced — is every file it installs signed as required — and asks it between signing
+  and the draft. Whether the installed app starts, installs over a published version, runs on a
+  clean machine and uninstalls cleanly is the app's own check, written with
+  [tauri-kit-dev](https://github.com/iyulab/tauri-kit-dev)'s `installer` tools. Both install
+  silently into a temporary folder to look; that step is a pair of installer flags, not a shared
+  component, so neither calls the other.
 - **Desktop frameworks other than Tauri.** Apps built on other shells call code-sign directly.
 
 ## Admission
