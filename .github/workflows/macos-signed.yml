@@ -64,6 +64,7 @@ jobs:
           owner: ${{ github.repository_owner }}
           repositories: ${{ steps.sign.outputs.name }}
           permission-actions: write
+          permission-metadata: read
 
       - name: Start the signing workflow and wait for it
         env:
