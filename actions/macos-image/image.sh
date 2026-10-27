@@ -7,8 +7,10 @@
 #   image.sh --bundle <path/App.app> --out <dir> --volume <name> [--image <name.dmg>]
 #            [--archive <name.tar.gz>] [--staple true|false]
 #
-# Prints image=<path> and archive=<path>.
+# Prints image=<path> and archive=<path> on stdout, and nothing else there: the action appends that stdout to the step's
+# outputs, so what the tools it runs print (stapler, hdiutil) goes to stderr.
 set -euo pipefail
+exec 3>&1 1>&2
 
 bundle='' out='' volume='' image='' archive='' staple=false
 while [ $# -gt 0 ]; do
@@ -48,5 +50,5 @@ hdiutil create -quiet -volname "$volume" -srcfolder "$staging" -fs HFS+ -format 
 # AppleDouble files macOS's tar would add for extended attributes.
 COPYFILE_DISABLE=1 tar --no-mac-metadata -czf "$out/$archive" -C "$(dirname "$bundle")" "$name"
 
-echo "image=$out/$image"
-echo "archive=$out/$archive"
+echo "image=$out/$image" >&3
+echo "archive=$out/$archive" >&3
