@@ -8,6 +8,10 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- `macos-signed.yml`: a reusable workflow that hands a macOS bundle to the organization's signing Mac and waits for it — the
+  caller builds the bundle without a credential, this starts the signing workflow (a private repository's, started with a
+  short-lived GitHub App token) that signs, notarizes, packages, checks and attaches the files to the draft release. One
+  signing repository serves every app; an app adds a job that calls this workflow.
 - Repository, scope and license.
 - `docs/design.md`: the design of the first workflow — signing only in code-sign's reusable workflow, the
   uninstaller signed between two bundling passes (measured), the stages and the inputs.

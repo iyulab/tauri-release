@@ -1,0 +1,88 @@
+name: macOS release, signed by the signing Mac (reusable)
+
+# Hands an app's macOS bundle to the organization's signing Mac and waits for it. The caller builds the bundle without
+# any credential (ad hoc, `bundle.macOS.signingIdentity` `-`), uploads it as an artifact and calls this workflow; the
+# signing Mac signs it with a Developer ID, notarizes it, makes the disk image and the update archive, checks them and
+# attaches them to the draft release the caller (or its Windows call) made. Nothing here holds a signing credential — this
+# job only starts the signing workflow and reports how it ended.
+#
+# Why a separate repository does the signing: the credential lives on one registered Mac, and a self-hosted runner is
+# allowed only for private repositories, while a release repository is public. The signing workflow lives in a private
+# repository, shared by every app; an app is added there with one line, and here with a job that calls this workflow.
+#
+#   jobs:
+#     macos-build:                       # the caller's own: build the bundle, no credential
+#       ...                              # uploads artifact `macos-bundle` = `<App>.app.tar` + `entitlements/`
+#     macos-sign:
+#       needs: [release, macos-build]    # after the draft exists
+#       uses: iyulab/tauri-release/.github/workflows/macos-signed.yml@<sha> # <tag>
+#       secrets: inherit                 # RELEASE_BOT_PRIVATE_KEY (organization secret)
+#       with:
+#         version: ${{ needs.macos-build.outputs.version }}
+#
+# Organization settings this needs, once for all apps: the variables RELEASE_BOT_CLIENT_ID and MACOS_SIGN_REPO (the
+# signing repository, owner/name), the secret RELEASE_BOT_PRIVATE_KEY, and the release bot's GitHub App installed on the
+# signing repository (Actions: write) and on every release repository (Contents: write, Actions: read).
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: The release version, e.g. 0.15.0 — the draft is `v<version>`.
+        required: true
+        type: string
+      artifact:
+        description: Artifact (from the calling run) holding `<App>.app.tar` and `entitlements/`.
+        required: false
+        type: string
+        default: macos-bundle
+    secrets:
+      RELEASE_BOT_PRIVATE_KEY:
+        required: true
+
+permissions: {}
+
+jobs:
+  sign:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions: {}
+    steps:
+      - id: sign
+        name: Name the signing repository
+        env:
+          SIGN_REPO: ${{ vars.MACOS_SIGN_REPO }}
+        run: |
+          [ -n "$SIGN_REPO" ] || { echo 'the organization variable MACOS_SIGN_REPO is not set' >&2; exit 1; }
+          echo "name=${SIGN_REPO#*/}" >> "$GITHUB_OUTPUT"
+
+      - id: token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.RELEASE_BOT_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ steps.sign.outputs.name }}
+          permission-actions: write
+
+      - name: Start the signing workflow and wait for it
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          SIGN_REPO: ${{ vars.MACOS_SIGN_REPO }}
+          RELEASES_REPO: ${{ github.repository }}
+          VERSION: ${{ inputs.version }}
+          ARTIFACT: ${{ inputs.artifact }}
+        run: |
+          [ -n "$SIGN_REPO" ] || { echo 'the organization variable MACOS_SIGN_REPO is not set' >&2; exit 1; }
+          before=$(gh run list --repo "$SIGN_REPO" --workflow macos-sign.yml --limit 1 --json databaseId --jq '.[0].databaseId // 0')
+          gh workflow run macos-sign.yml --repo "$SIGN_REPO" \
+            -f releases-repo="$RELEASES_REPO" -f run-id="$GITHUB_RUN_ID" -f artifact="$ARTIFACT" -f version="$VERSION"
+          id=''
+          for _ in $(seq 1 30); do
+            sleep 5
+            latest=$(gh run list --repo "$SIGN_REPO" --workflow macos-sign.yml --limit 1 --json databaseId --jq '.[0].databaseId // 0')
+            if [ "$latest" != "$before" ]; then id=$latest; break; fi
+          done
+          [ -n "$id" ] || { echo 'the signing run did not start' >&2; exit 1; }
+          echo "signing run $id"
+          gh run watch "$id" --repo "$SIGN_REPO" --exit-status --interval 30
