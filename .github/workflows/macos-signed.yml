@@ -75,15 +75,27 @@ jobs:
           ARTIFACT: ${{ inputs.artifact }}
         run: |
           [ -n "$SIGN_REPO" ] || { echo 'the organization variable MACOS_SIGN_REPO is not set' >&2; exit 1; }
-          before=$(gh run list --repo "$SIGN_REPO" --workflow macos-sign.yml --limit 1 --json databaseId --jq '.[0].databaseId // 0')
-          gh workflow run macos-sign.yml --repo "$SIGN_REPO" \
-            -f releases-repo="$RELEASES_REPO" -f run-id="$GITHUB_RUN_ID" -f artifact="$ARTIFACT" -f version="$VERSION"
+          # The REST API only: `gh run list` / `gh run watch` resolve the default branch through GraphQL, which a token limited to
+          # Actions and metadata is not allowed to read (the failure that showed on the first runs).
+          latest() {
+            gh api "repos/$SIGN_REPO/actions/workflows/macos-sign.yml/runs?event=workflow_dispatch&per_page=1" --jq '.workflow_runs[0].id // 0'
+          }
+          before=$(latest)
+          gh api -X POST "repos/$SIGN_REPO/actions/workflows/macos-sign.yml/dispatches" -f ref=main \
+            -f "inputs[releases-repo]=$RELEASES_REPO" -f "inputs[run-id]=$GITHUB_RUN_ID" -f "inputs[artifact]=$ARTIFACT" -f "inputs[version]=$VERSION"
           id=''
           for _ in $(seq 1 30); do
             sleep 5
-            latest=$(gh run list --repo "$SIGN_REPO" --workflow macos-sign.yml --limit 1 --json databaseId --jq '.[0].databaseId // 0')
-            if [ "$latest" != "$before" ]; then id=$latest; break; fi
+            now=$(latest)
+            if [ "$now" != "$before" ]; then id=$now; break; fi
           done
           [ -n "$id" ] || { echo 'the signing run did not start' >&2; exit 1; }
           echo "signing run $id"
-          gh run watch "$id" --repo "$SIGN_REPO" --exit-status --interval 30
+          # Wait for it (the signing Mac queues runs one at a time; a release needs that Mac on).
+          for _ in $(seq 1 170); do
+            read -r run_status run_conclusion < <(gh api "repos/$SIGN_REPO/actions/runs/$id" --jq '[.status, (.conclusion // "-")] | @tsv')
+            [ "$run_status" = completed ] && break
+            sleep 30
+          done
+          echo "signing run $id: $run_status / $run_conclusion"
+          [ "$run_status" = completed ] && [ "$run_conclusion" = success ]
